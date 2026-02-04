@@ -16,6 +16,10 @@ return function (App $app) {
     $app->post('/banks/{id}/delete', [BankController::class, 'delete'])->setName('banks.delete');
     $app->get('/banks/{id}/accounts', [BankController::class, 'accounts'])->setName('banks.accounts');
     
+    // Settings Routes
+    $app->get('/settings', [\App\Controllers\SettingsController::class, 'index'])->setName('settings');
+    $app->post('/settings', [\App\Controllers\SettingsController::class, 'save'])->setName('settings.save');
+    
     // API Routes
     $app->post('/api/banks/test', [ApiController::class, 'testConnection'])->setName('api.banks.test');
     $app->get('/api/banks/{id}/accounts', [ApiController::class, 'getAccounts'])->setName('api.banks.accounts');

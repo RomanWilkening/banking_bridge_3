@@ -20,13 +20,19 @@ class FinTSService
     private Logger $logger;
     private ?FinTs $finTs = null;
     private array $config = [];
-
-    public const PRODUCT_NAME = 'BankingBridgeHA';
-    public const PRODUCT_VERSION = '1.0.0';
+    private ?string $productId = null;
 
     public function __construct(Logger $logger)
     {
         $this->logger = $logger;
+    }
+
+    /**
+     * Set the FinTS product registration ID
+     */
+    public function setProductId(?string $productId): void
+    {
+        $this->productId = $productId;
     }
 
     /**
@@ -37,8 +43,15 @@ class FinTSService
         $options = new FinTsOptions();
         $options->url = $bankConfig['fints_url'];
         $options->bankCode = $bankConfig['bank_code'];
-        $options->productName = self::PRODUCT_NAME;
-        $options->productVersion = self::PRODUCT_VERSION;
+        
+        // Use registered product ID or fallback
+        if (!empty($this->productId)) {
+            $options->productName = $this->productId;
+            $options->productVersion = '1.0.0';
+        } else {
+            throw new Exception('FinTS Produkt-ID nicht konfiguriert. Bitte in den Einstellungen hinterlegen.');
+        }
+        
         return $options;
     }
 
