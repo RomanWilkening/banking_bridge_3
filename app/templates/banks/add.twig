@@ -1,0 +1,204 @@
+{% extends "layout.twig" %}
+
+{% block content %}
+<div class="max-w-2xl mx-auto">
+    <div class="bg-white shadow rounded-lg">
+        <div class="px-4 py-5 sm:px-6 border-b border-gray-200">
+            <h3 class="text-lg font-medium leading-6 text-gray-900">Neue Bankverbindung</h3>
+            <p class="mt-1 text-sm text-gray-500">Geben Sie Ihre Bankzugangsdaten ein. Diese werden sicher in der lokalen Datenbank gespeichert.</p>
+        </div>
+
+        <form method="POST" action="/banks/add" x-data="bankForm()" @submit.prevent="submitForm">
+            <div class="px-4 py-5 sm:p-6 space-y-6">
+                
+                <!-- Error Messages -->
+                {% if errors.general is defined %}
+                <div class="rounded-md bg-red-50 p-4">
+                    <div class="flex">
+                        <div class="flex-shrink-0">
+                            <svg class="h-5 w-5 text-red-400" viewBox="0 0 20 20" fill="currentColor">
+                                <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.28 7.22a.75.75 0 00-1.06 1.06L8.94 10l-1.72 1.72a.75.75 0 101.06 1.06L10 11.06l1.72 1.72a.75.75 0 101.06-1.06L11.06 10l1.72-1.72a.75.75 0 00-1.06-1.06L10 8.94 8.28 7.22z" clip-rule="evenodd" />
+                            </svg>
+                        </div>
+                        <div class="ml-3">
+                            <p class="text-sm font-medium text-red-800">{{ errors.general }}</p>
+                        </div>
+                    </div>
+                </div>
+                {% endif %}
+
+                <!-- Bank Name -->
+                <div>
+                    <label for="name" class="block text-sm font-medium text-gray-700">Bezeichnung *</label>
+                    <input type="text" name="name" id="name" x-model="formData.name"
+                           class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm border px-3 py-2"
+                           placeholder="z.B. Sparkasse Privatkonto"
+                           value="{{ bank.name ?? '' }}" required>
+                    {% if errors.name is defined %}
+                    <p class="mt-1 text-sm text-red-600">{{ errors.name }}</p>
+                    {% endif %}
+                </div>
+
+                <!-- Bank Code -->
+                <div>
+                    <label for="bank_code" class="block text-sm font-medium text-gray-700">Bankleitzahl (BLZ) *</label>
+                    <input type="text" name="bank_code" id="bank_code" x-model="formData.bank_code"
+                           class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm border px-3 py-2"
+                           placeholder="z.B. 12345678"
+                           pattern="\d{8}" maxlength="8"
+                           value="{{ bank.bank_code ?? '' }}" required>
+                    {% if errors.bank_code is defined %}
+                    <p class="mt-1 text-sm text-red-600">{{ errors.bank_code }}</p>
+                    {% endif %}
+                    <p class="mt-1 text-xs text-gray-500">8-stellige Bankleitzahl</p>
+                </div>
+
+                <!-- FinTS URL -->
+                <div>
+                    <label for="fints_url" class="block text-sm font-medium text-gray-700">FinTS-URL *</label>
+                    <input type="url" name="fints_url" id="fints_url" x-model="formData.fints_url"
+                           class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm border px-3 py-2"
+                           placeholder="https://banking.bank.de/fints"
+                           value="{{ bank.fints_url ?? '' }}" required>
+                    {% if errors.fints_url is defined %}
+                    <p class="mt-1 text-sm text-red-600">{{ errors.fints_url }}</p>
+                    {% endif %}
+                    <p class="mt-1 text-xs text-gray-500">
+                        Die FinTS-URL finden Sie auf der Website Ihrer Bank oder unter 
+                        <a href="https://www.hbci-zka.de/institute/institut_auswahl.htm" target="_blank" class="text-primary-600 hover:underline">hbci-zka.de</a>
+                    </p>
+                </div>
+
+                <!-- Username -->
+                <div>
+                    <label for="username" class="block text-sm font-medium text-gray-700">Benutzerkennung *</label>
+                    <input type="text" name="username" id="username" x-model="formData.username"
+                           class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm border px-3 py-2"
+                           placeholder="Ihre Online-Banking Benutzerkennung"
+                           value="{{ bank.username ?? '' }}" required>
+                    {% if errors.username is defined %}
+                    <p class="mt-1 text-sm text-red-600">{{ errors.username }}</p>
+                    {% endif %}
+                </div>
+
+                <!-- Password -->
+                <div>
+                    <label for="password" class="block text-sm font-medium text-gray-700">PIN/Passwort *</label>
+                    <input type="password" name="password" id="password" x-model="formData.password"
+                           class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm border px-3 py-2"
+                           placeholder="Ihre Online-Banking PIN"
+                           value="{{ bank.password ?? '' }}" required>
+                    {% if errors.password is defined %}
+                    <p class="mt-1 text-sm text-red-600">{{ errors.password }}</p>
+                    {% endif %}
+                </div>
+
+                <!-- Test Result -->
+                <div x-show="testResult" x-cloak>
+                    <div x-show="testResult?.success" class="rounded-md bg-green-50 p-4">
+                        <div class="flex">
+                            <div class="flex-shrink-0">
+                                <svg class="h-5 w-5 text-green-400" viewBox="0 0 20 20" fill="currentColor">
+                                    <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.857-9.809a.75.75 0 00-1.214-.882l-3.483 4.79-1.88-1.88a.75.75 0 10-1.06 1.061l2.5 2.5a.75.75 0 001.137-.089l4-5.5z" clip-rule="evenodd" />
+                                </svg>
+                            </div>
+                            <div class="ml-3">
+                                <p class="text-sm font-medium text-green-800" x-text="testResult?.message"></p>
+                            </div>
+                        </div>
+                    </div>
+                    <div x-show="!testResult?.success" class="rounded-md bg-red-50 p-4">
+                        <div class="flex">
+                            <div class="flex-shrink-0">
+                                <svg class="h-5 w-5 text-red-400" viewBox="0 0 20 20" fill="currentColor">
+                                    <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.28 7.22a.75.75 0 00-1.06 1.06L8.94 10l-1.72 1.72a.75.75 0 101.06 1.06L10 11.06l1.72 1.72a.75.75 0 101.06-1.06L11.06 10l1.72-1.72a.75.75 0 00-1.06-1.06L10 8.94 8.28 7.22z" clip-rule="evenodd" />
+                                </svg>
+                            </div>
+                            <div class="ml-3">
+                                <p class="text-sm font-medium text-red-800" x-text="testResult?.message"></p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="bg-gray-50 px-4 py-3 text-right sm:px-6 flex justify-between">
+                <button type="button" @click="testConnection" :disabled="testing"
+                        class="inline-flex items-center rounded-md bg-white px-4 py-2 text-sm font-semibold text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 hover:bg-gray-50 disabled:opacity-50">
+                    <span x-show="testing" class="loading-spinner mr-2"></span>
+                    <span x-text="testing ? 'Teste...' : 'Verbindung testen'"></span>
+                </button>
+                <div class="space-x-3">
+                    <a href="/banks" class="inline-flex items-center rounded-md bg-white px-4 py-2 text-sm font-semibold text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 hover:bg-gray-50">
+                        Abbrechen
+                    </a>
+                    <button type="submit" :disabled="saving"
+                            class="inline-flex items-center rounded-md bg-primary-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-primary-500 disabled:opacity-50">
+                        <span x-show="saving" class="loading-spinner mr-2"></span>
+                        <span x-text="saving ? 'Speichere...' : 'Speichern'"></span>
+                    </button>
+                </div>
+            </div>
+        </form>
+    </div>
+
+    <!-- Help Section -->
+    <div class="mt-6 bg-blue-50 rounded-lg p-4">
+        <h4 class="text-sm font-medium text-blue-800 mb-2">Hinweise zur Sicherheit</h4>
+        <ul class="text-sm text-blue-700 space-y-1 list-disc list-inside">
+            <li>Ihre Zugangsdaten werden nur lokal in der SQLite-Datenbank gespeichert</li>
+            <li>Es werden keine Daten an externe Server übertragen (außer zur Bank via FinTS)</li>
+            <li>Stellen Sie sicher, dass der Docker-Container sicher gehostet ist</li>
+            <li>Verwenden Sie idealerweise eine separate Banking-PIN für diese Anwendung</li>
+        </ul>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function bankForm() {
+    return {
+        formData: {
+            name: '{{ bank.name ?? '' }}',
+            bank_code: '{{ bank.bank_code ?? '' }}',
+            fints_url: '{{ bank.fints_url ?? '' }}',
+            username: '{{ bank.username ?? '' }}',
+            password: '{{ bank.password ?? '' }}'
+        },
+        testing: false,
+        saving: false,
+        testResult: null,
+
+        async testConnection() {
+            this.testing = true;
+            this.testResult = null;
+
+            try {
+                const response = await fetch('/api/banks/test', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(this.formData)
+                });
+                this.testResult = await response.json();
+            } catch (error) {
+                this.testResult = {
+                    success: false,
+                    message: 'Netzwerkfehler: ' + error.message
+                };
+            }
+
+            this.testing = false;
+        },
+
+        submitForm() {
+            this.saving = true;
+            // Submit form normally
+            this.$el.submit();
+        }
+    }
+}
+</script>
+{% endblock %}

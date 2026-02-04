@@ -1,0 +1,23 @@
+{
+    "name": "fints-homeassistant/banking-bridge",
+    "description": "FinTS Banking Bridge for Home Assistant with MQTT",
+    "type": "project",
+    "require": {
+        "php": "^8.2",
+        "slim/slim": "^4.13",
+        "slim/psr7": "^1.6",
+        "slim/twig-view": "^3.4",
+        "php-di/php-di": "^7.0",
+        "php-di/slim-bridge": "^3.4",
+        "nemiah/php-fints": "^3.1",
+        "monolog/monolog": "^3.5"
+    },
+    "autoload": {
+        "psr-4": {
+            "App\\": "src/"
+        }
+    },
+    "scripts": {
+        "start": "php -S 0.0.0.0:8080 -t public"
+    }
+}

@@ -1,0 +1,19 @@
+# Development override - use with: docker-compose -f docker-compose.yml -f docker-compose.dev.yml up
+version: '3.8'
+
+services:
+  banking-bridge:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      # Mount source code for hot reloading
+      - ./app/src:/var/www/html/src
+      - ./app/templates:/var/www/html/templates
+      - ./app/config:/var/www/html/config
+      - ./app/public:/var/www/html/public
+      # Mount data directory for persistence
+      - ./data:/data
+    environment:
+      - APP_ENV=development
+      - APP_DEBUG=true

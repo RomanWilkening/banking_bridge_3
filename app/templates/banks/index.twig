@@ -1,0 +1,85 @@
+{% extends "layout.twig" %}
+
+{% block content %}
+<div class="space-y-6">
+    <!-- Header with Add Button -->
+    <div class="flex justify-between items-center">
+        <p class="text-gray-600">Verwalten Sie hier Ihre Bankverbindungen</p>
+        <a href="/banks/add" class="inline-flex items-center rounded-md bg-primary-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-primary-500 transition-colors">
+            <svg class="-ml-0.5 mr-1.5 h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                <path d="M10.75 4.75a.75.75 0 00-1.5 0v4.5h-4.5a.75.75 0 000 1.5h4.5v4.5a.75.75 0 001.5 0v-4.5h4.5a.75.75 0 000-1.5h-4.5v-4.5z" />
+            </svg>
+            Bank hinzufügen
+        </a>
+    </div>
+
+    {% if banks|length > 0 %}
+    <!-- Banks Grid -->
+    <div class="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
+        {% for bank in banks %}
+        <div class="bg-white overflow-hidden shadow rounded-lg hover:shadow-md transition-shadow">
+            <div class="p-5">
+                <div class="flex items-center">
+                    <div class="flex-shrink-0">
+                        <span class="inline-flex items-center justify-center h-14 w-14 rounded-full bg-primary-100">
+                            <span class="text-2xl">🏦</span>
+                        </span>
+                    </div>
+                    <div class="ml-4 flex-1">
+                        <h3 class="text-lg font-medium text-gray-900">{{ bank.name }}</h3>
+                        <p class="text-sm text-gray-500">BLZ: {{ bank.bank_code }}</p>
+                    </div>
+                </div>
+                
+                {% if bank.accounts|length > 0 %}
+                <div class="mt-4 border-t border-gray-200 pt-4">
+                    <p class="text-sm font-medium text-gray-500 mb-2">Konten ({{ bank.accounts|length }})</p>
+                    <ul class="space-y-2">
+                        {% for account in bank.accounts|slice(0, 3) %}
+                        <li class="flex justify-between items-center text-sm">
+                            <span class="text-gray-600 truncate">{{ account.account_name ?? account.iban }}</span>
+                            {% if account.balance is not null %}
+                            <span class="font-medium {% if account.balance >= 0 %}text-green-600{% else %}text-red-600{% endif %}">
+                                {{ account.balance|number_format(2, ',', '.') }} €
+                            </span>
+                            {% endif %}
+                        </li>
+                        {% endfor %}
+                        {% if bank.accounts|length > 3 %}
+                        <li class="text-sm text-gray-500">... und {{ bank.accounts|length - 3 }} weitere</li>
+                        {% endif %}
+                    </ul>
+                </div>
+                {% else %}
+                <div class="mt-4 border-t border-gray-200 pt-4">
+                    <p class="text-sm text-gray-500">Noch keine Konten abgerufen</p>
+                </div>
+                {% endif %}
+            </div>
+            <div class="bg-gray-50 px-5 py-3 flex justify-between">
+                <a href="/banks/{{ bank.id }}" class="text-sm font-medium text-primary-600 hover:text-primary-500">
+                    Details →
+                </a>
+                <span class="text-sm text-gray-400">{{ bank.created_at|date('d.m.Y') }}</span>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    {% else %}
+    <!-- Empty State -->
+    <div class="text-center bg-white rounded-lg shadow px-6 py-12">
+        <span class="text-6xl mb-4 block">🏦</span>
+        <h3 class="mt-2 text-lg font-semibold text-gray-900">Keine Banken verbunden</h3>
+        <p class="mt-1 text-sm text-gray-500">Fügen Sie Ihre erste Bankverbindung hinzu, um zu beginnen.</p>
+        <div class="mt-6">
+            <a href="/banks/add" class="inline-flex items-center rounded-md bg-primary-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-primary-500">
+                <svg class="-ml-0.5 mr-1.5 h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                    <path d="M10.75 4.75a.75.75 0 00-1.5 0v4.5h-4.5a.75.75 0 000 1.5h4.5v4.5a.75.75 0 001.5 0v-4.5h4.5a.75.75 0 000-1.5h-4.5v-4.5z" />
+                </svg>
+                Bank hinzufügen
+            </a>
+        </div>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

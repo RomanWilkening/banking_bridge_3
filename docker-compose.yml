@@ -1,0 +1,45 @@
+version: '3.8'
+
+services:
+  banking-bridge:
+    build: .
+    container_name: banking-bridge
+    restart: unless-stopped
+    ports:
+      - "${WEB_PORT:-8080}:80"
+    volumes:
+      # Persistent data storage (SQLite database, logs)
+      - banking_data:/data
+    environment:
+      # Application Settings
+      - APP_ENV=${APP_ENV:-production}
+      - APP_DEBUG=${APP_DEBUG:-false}
+      
+      # MQTT Settings for Home Assistant (for future use)
+      - MQTT_HOST=${MQTT_HOST:-homeassistant.local}
+      - MQTT_PORT=${MQTT_PORT:-1883}
+      - MQTT_USER=${MQTT_USER:-}
+      - MQTT_PASSWORD=${MQTT_PASSWORD:-}
+      - MQTT_TOPIC_PREFIX=${MQTT_TOPIC_PREFIX:-banking}
+      
+      # Timezone
+      - TZ=${TZ:-Europe/Berlin}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  banking_data:
+    driver: local
+
+# Development override example (use with: docker-compose -f docker-compose.yml -f docker-compose.dev.yml up)
+# Create docker-compose.dev.yml for development with:
+#   services:
+#     banking-bridge:
+#       volumes:
+#         - ./app:/var/www/html
+#       environment:
+#         - APP_DEBUG=true
