@@ -396,43 +396,37 @@ class FinTSService
     }
 
     /**
+     * Check if the selected TAN mode is decoupled
+     */
+    private function isDecoupledMode(): bool
+    {
+        if ($this->finTs === null) {
+            return false;
+        }
+        
+        try {
+            $tanMode = $this->finTs->getSelectedTanMode();
+            if ($tanMode && method_exists($tanMode, 'isDecoupled')) {
+                return $tanMode->isDecoupled();
+            }
+        } catch (Exception $e) {
+            $this->logger->debug('Could not check TAN mode', ['error' => $e->getMessage()]);
+        }
+        
+        return false;
+    }
+
+    /**
      * Extract TAN request information
      */
     private function extractTanRequest($action): array
     {
         $tanRequest = $action->getTanRequest();
         
-        // Check if this is a decoupled TAN (app confirmation without TAN input)
-        $isDecoupled = false;
+        // Check if the selected TAN mode is decoupled (app confirmation without TAN input)
+        $isDecoupled = $this->isDecoupledMode();
         
-        // Method 1: Check TanRequest->isDecoupled()
-        if (method_exists($tanRequest, 'isDecoupled')) {
-            $isDecoupled = $tanRequest->isDecoupled();
-            $this->logger->debug('isDecoupled from TanRequest', ['value' => $isDecoupled]);
-        }
-        
-        // Method 2: Check TanMode->isDecoupled() via the action
-        if (!$isDecoupled && method_exists($action, 'getTanMode')) {
-            $tanMode = $action->getTanMode();
-            if ($tanMode && method_exists($tanMode, 'isDecoupled')) {
-                $isDecoupled = $tanMode->isDecoupled();
-                $this->logger->debug('isDecoupled from TanMode', ['value' => $isDecoupled]);
-            }
-        }
-        
-        // Method 3: Check if challenge contains typical decoupled indicators
         $challenge = $tanRequest->getChallenge();
-        if (!$isDecoupled && $challenge) {
-            $decoupledKeywords = ['app', 'freigabe', 'bestätigen', 'push', 'mobil'];
-            $challengeLower = strtolower($challenge);
-            foreach ($decoupledKeywords as $keyword) {
-                if (strpos($challengeLower, $keyword) !== false) {
-                    $isDecoupled = true;
-                    $this->logger->debug('isDecoupled detected from challenge text', ['keyword' => $keyword]);
-                    break;
-                }
-            }
-        }
         
         $this->logger->info('TAN request extracted', [
             'is_decoupled' => $isDecoupled,
