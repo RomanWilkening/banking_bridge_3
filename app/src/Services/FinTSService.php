@@ -205,10 +205,47 @@ class FinTSService
                 $balances = $getBalance->getBalances();
                 if (!empty($balances)) {
                     $balance = reset($balances);
-                    return [
-                        'amount' => $balance->getAmount()->toFloat(),
-                        'date' => $balance->getDate()?->format('Y-m-d H:i:s')
-                    ];
+                    
+                    // Try different methods to get amount depending on phpFinTS version
+                    $amount = null;
+                    $date = null;
+                    
+                    // Try getBooked() first (newer API)
+                    if (method_exists($balance, 'getBooked')) {
+                        $booked = $balance->getBooked();
+                        if ($booked && method_exists($booked, 'getAmount')) {
+                            $amountObj = $booked->getAmount();
+                            $amount = is_object($amountObj) && method_exists($amountObj, 'toFloat') 
+                                ? $amountObj->toFloat() 
+                                : (float) $amountObj;
+                        }
+                    }
+                    
+                    // Fallback: try direct getAmount()
+                    if ($amount === null && method_exists($balance, 'getAmount')) {
+                        $amountObj = $balance->getAmount();
+                        if (is_object($amountObj) && method_exists($amountObj, 'toFloat')) {
+                            $amount = $amountObj->toFloat();
+                        } elseif (is_numeric($amountObj)) {
+                            $amount = (float) $amountObj;
+                        }
+                    }
+                    
+                    // Try to get date
+                    if (method_exists($balance, 'getDate')) {
+                        $dateObj = $balance->getDate();
+                        $date = $dateObj ? $dateObj->format('Y-m-d H:i:s') : null;
+                    } elseif (method_exists($balance, 'getValutaDate')) {
+                        $dateObj = $balance->getValutaDate();
+                        $date = $dateObj ? $dateObj->format('Y-m-d H:i:s') : null;
+                    }
+                    
+                    if ($amount !== null) {
+                        return [
+                            'amount' => $amount,
+                            'date' => $date
+                        ];
+                    }
                 }
             }
         } catch (Exception $e) {
