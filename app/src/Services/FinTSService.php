@@ -404,12 +404,43 @@ class FinTSService
         
         // Check if this is a decoupled TAN (app confirmation without TAN input)
         $isDecoupled = false;
+        
+        // Method 1: Check TanRequest->isDecoupled()
         if (method_exists($tanRequest, 'isDecoupled')) {
             $isDecoupled = $tanRequest->isDecoupled();
+            $this->logger->debug('isDecoupled from TanRequest', ['value' => $isDecoupled]);
         }
         
+        // Method 2: Check TanMode->isDecoupled() via the action
+        if (!$isDecoupled && method_exists($action, 'getTanMode')) {
+            $tanMode = $action->getTanMode();
+            if ($tanMode && method_exists($tanMode, 'isDecoupled')) {
+                $isDecoupled = $tanMode->isDecoupled();
+                $this->logger->debug('isDecoupled from TanMode', ['value' => $isDecoupled]);
+            }
+        }
+        
+        // Method 3: Check if challenge contains typical decoupled indicators
+        $challenge = $tanRequest->getChallenge();
+        if (!$isDecoupled && $challenge) {
+            $decoupledKeywords = ['app', 'freigabe', 'bestätigen', 'push', 'mobil'];
+            $challengeLower = strtolower($challenge);
+            foreach ($decoupledKeywords as $keyword) {
+                if (strpos($challengeLower, $keyword) !== false) {
+                    $isDecoupled = true;
+                    $this->logger->debug('isDecoupled detected from challenge text', ['keyword' => $keyword]);
+                    break;
+                }
+            }
+        }
+        
+        $this->logger->info('TAN request extracted', [
+            'is_decoupled' => $isDecoupled,
+            'challenge' => substr($challenge ?? '', 0, 100)
+        ]);
+        
         return [
-            'challenge' => $tanRequest->getChallenge(),
+            'challenge' => $challenge,
             'challenge_html' => method_exists($tanRequest, 'getChallengeHtml') ? $tanRequest->getChallengeHtml() : null,
             'tan_medium' => method_exists($tanRequest, 'getTanMediumName') ? $tanRequest->getTanMediumName() : null,
             'is_decoupled' => $isDecoupled
