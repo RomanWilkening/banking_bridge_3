@@ -193,6 +193,98 @@ class ApiController
     }
 
     /**
+     * Check decoupled TAN status (for pushTAN app confirmation)
+     */
+    public function checkDecoupled(Request $request, Response $response, array $args): Response
+    {
+        $bankId = (int) $args['id'];
+        $bank = $this->db->getBankById($bankId);
+        
+        if (!$bank) {
+            return $this->jsonResponse($response, [
+                'success' => false,
+                'message' => 'Bank nicht gefunden'
+            ], 404);
+        }
+
+        $session = $this->db->getFinTSSession($bankId);
+        if (!$session) {
+            return $this->jsonResponse($response, [
+                'success' => false,
+                'message' => 'Keine aktive Sitzung gefunden'
+            ], 400);
+        }
+
+        // Get persisted action from session
+        $persistedAction = $_SESSION['fints_action_' . $bankId] ?? null;
+        if (!$persistedAction) {
+            return $this->jsonResponse($response, [
+                'success' => false,
+                'message' => 'Keine aktive Aktion gefunden'
+            ], 400);
+        }
+
+        $result = $this->fintsService->checkDecoupledStatus(
+            [
+                'bank_code' => $bank['bank_code'],
+                'fints_url' => $bank['fints_url'],
+                'username' => $bank['username'],
+                'password' => $bank['password']
+            ],
+            $session['session_data'],
+            $persistedAction
+        );
+
+        // Handle still pending
+        if (isset($result['status']) && $result['status'] === 'pending') {
+            // Update session data
+            if (isset($result['persisted_instance'])) {
+                $this->db->saveFinTSSession($bankId, $result['persisted_instance']);
+            }
+            if (isset($result['persisted_action'])) {
+                $_SESSION['fints_action_' . $bankId] = $result['persisted_action'];
+            }
+            
+            unset($result['persisted_instance']);
+            unset($result['persisted_action']);
+            
+            return $this->jsonResponse($response, $result);
+        }
+
+        // Handle another TAN requirement
+        if (isset($result['needs_tan']) && $result['needs_tan']) {
+            $this->db->saveFinTSSession($bankId, $result['persisted_instance']);
+            $_SESSION['fints_action_' . $bankId] = $result['persisted_action'];
+            
+            return $this->jsonResponse($response, [
+                'success' => false,
+                'needs_tan' => true,
+                'tan_request' => $result['tan_request']
+            ]);
+        }
+
+        // Clean up session on success
+        unset($_SESSION['fints_action_' . $bankId]);
+
+        // Store accounts if we got them
+        if ($result['success'] && isset($result['accounts'])) {
+            foreach ($result['accounts'] as $accountData) {
+                $this->db->upsertAccount($bankId, $accountData);
+            }
+            
+            if (isset($result['persisted_instance'])) {
+                $this->db->saveFinTSSession($bankId, $result['persisted_instance']);
+            }
+        }
+
+        // Remove large/non-serializable data before JSON response
+        unset($result['persisted_instance']);
+        unset($result['persisted_action']);
+
+        return $this->jsonResponse($response, $result);
+    }
+
+    /**
      * Helper to create JSON response
      */
     private function jsonResponse(Response $response, array $data, int $status = 200): Response

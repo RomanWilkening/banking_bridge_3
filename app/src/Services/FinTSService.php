@@ -402,11 +402,82 @@ class FinTSService
     {
         $tanRequest = $action->getTanRequest();
         
+        // Check if this is a decoupled TAN (app confirmation without TAN input)
+        $isDecoupled = false;
+        if (method_exists($tanRequest, 'isDecoupled')) {
+            $isDecoupled = $tanRequest->isDecoupled();
+        }
+        
         return [
             'challenge' => $tanRequest->getChallenge(),
             'challenge_html' => method_exists($tanRequest, 'getChallengeHtml') ? $tanRequest->getChallengeHtml() : null,
-            'tan_medium' => method_exists($tanRequest, 'getTanMediumName') ? $tanRequest->getTanMediumName() : null
+            'tan_medium' => method_exists($tanRequest, 'getTanMediumName') ? $tanRequest->getTanMediumName() : null,
+            'is_decoupled' => $isDecoupled
         ];
+    }
+
+    /**
+     * Check decoupled TAN status (for pushTAN app confirmation)
+     */
+    public function checkDecoupledStatus(array $bankConfig, string $persistedInstance, string $persistedAction): array
+    {
+        try {
+            $options = $this->createOptions($bankConfig);
+            $credentials = $this->createCredentials($bankConfig);
+            $this->finTs = FinTs::new($options, $credentials, $persistedInstance);
+
+            $action = unserialize(base64_decode($persistedAction));
+            
+            // Check if the decoupled authentication was completed
+            $status = $this->finTs->checkDecoupledSubmission($action);
+
+            if ($action->needsTan()) {
+                // Still waiting for confirmation
+                return [
+                    'success' => false,
+                    'status' => 'pending',
+                    'message' => 'Warte auf Bestätigung in der Banking-App...',
+                    'persisted_action' => base64_encode(serialize($action)),
+                    'persisted_instance' => $this->finTs->persist()
+                ];
+            }
+
+            // Confirmation received - process the result
+            if ($action instanceof GetSEPAAccounts) {
+                return $this->processAccountsResult($action);
+            }
+
+            // If this was a login action, now fetch the accounts
+            try {
+                $getSepaAccounts = GetSEPAAccounts::create();
+                $this->finTs->execute($getSepaAccounts);
+
+                if ($getSepaAccounts->needsTan()) {
+                    return [
+                        'success' => false,
+                        'needs_tan' => true,
+                        'tan_request' => $this->extractTanRequest($getSepaAccounts),
+                        'persisted_action' => base64_encode(serialize($getSepaAccounts)),
+                        'persisted_instance' => $this->finTs->persist()
+                    ];
+                }
+
+                return $this->processAccountsResult($getSepaAccounts);
+            } catch (Exception $e) {
+                $this->logger->info('Decoupled auth accepted, but could not fetch accounts', ['error' => $e->getMessage()]);
+                return [
+                    'success' => true,
+                    'message' => 'Bestätigung erfolgreich - bitte Konten erneut abrufen'
+                ];
+            }
+
+        } catch (Exception $e) {
+            $this->logger->error('Decoupled check failed', ['error' => $e->getMessage()]);
+            return [
+                'success' => false,
+                'message' => 'Fehler bei Statusabfrage: ' . $e->getMessage()
+            ];
+        }
     }
 
     /**
