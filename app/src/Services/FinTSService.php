@@ -4,6 +4,8 @@ declare(strict_types=1);
 namespace App\Services;
 
 use Fhp\FinTs;
+use Fhp\Options\FinTsOptions;
+use Fhp\Options\Credentials;
 use Fhp\Model\SEPAAccount;
 use Fhp\Action\GetSEPAAccounts;
 use Fhp\Action\GetBalance;
@@ -19,12 +21,33 @@ class FinTSService
     private ?FinTs $finTs = null;
     private array $config = [];
 
-    public const PRODUCT_NAME = 'BankingBridge';
-    public const PRODUCT_VERSION = '1.0';
+    public const PRODUCT_NAME = 'BankingBridgeHA';
+    public const PRODUCT_VERSION = '1.0.0';
 
     public function __construct(Logger $logger)
     {
         $this->logger = $logger;
+    }
+
+    /**
+     * Create FinTS options object
+     */
+    private function createOptions(array $bankConfig): FinTsOptions
+    {
+        $options = new FinTsOptions();
+        $options->url = $bankConfig['fints_url'];
+        $options->bankCode = $bankConfig['bank_code'];
+        $options->productName = self::PRODUCT_NAME;
+        $options->productVersion = self::PRODUCT_VERSION;
+        return $options;
+    }
+
+    /**
+     * Create credentials object
+     */
+    private function createCredentials(array $bankConfig): Credentials
+    {
+        return Credentials::create($bankConfig['username'], $bankConfig['password']);
     }
 
     /**
@@ -34,13 +57,10 @@ class FinTSService
     {
         $this->config = $bankConfig;
         
-        $this->finTs = FinTs::new(
-            $bankConfig['fints_url'],
-            $bankConfig['bank_code'],
-            $bankConfig['username'],
-            $bankConfig['password'],
-            self::PRODUCT_NAME . '/' . self::PRODUCT_VERSION
-        );
+        $options = $this->createOptions($bankConfig);
+        $credentials = $this->createCredentials($bankConfig);
+        
+        $this->finTs = FinTs::new($options, $credentials);
 
         $this->logger->info('FinTS initialized', [
             'bank_code' => $bankConfig['bank_code'],
@@ -96,17 +116,13 @@ class FinTSService
     public function getAccounts(array $bankConfig, ?string $persistedInstance = null): array
     {
         try {
+            $options = $this->createOptions($bankConfig);
+            $credentials = $this->createCredentials($bankConfig);
+            
             if ($persistedInstance) {
-                $this->finTs = FinTs::new(
-                    $bankConfig['fints_url'],
-                    $bankConfig['bank_code'],
-                    $bankConfig['username'],
-                    $bankConfig['password'],
-                    self::PRODUCT_NAME . '/' . self::PRODUCT_VERSION
-                );
-                $this->finTs->loadPersistedInstance($persistedInstance);
+                $this->finTs = FinTs::new($options, $credentials, $persistedInstance);
             } else {
-                $this->init($bankConfig);
+                $this->finTs = FinTs::new($options, $credentials);
             }
 
             $getSepaAccounts = GetSEPAAccounts::create();
@@ -201,14 +217,9 @@ class FinTSService
     public function submitTan(array $bankConfig, string $persistedInstance, string $persistedAction, string $tan): array
     {
         try {
-            $this->finTs = FinTs::new(
-                $bankConfig['fints_url'],
-                $bankConfig['bank_code'],
-                $bankConfig['username'],
-                $bankConfig['password'],
-                self::PRODUCT_NAME . '/' . self::PRODUCT_VERSION
-            );
-            $this->finTs->loadPersistedInstance($persistedInstance);
+            $options = $this->createOptions($bankConfig);
+            $credentials = $this->createCredentials($bankConfig);
+            $this->finTs = FinTs::new($options, $credentials, $persistedInstance);
 
             $action = unserialize(base64_decode($persistedAction));
             
