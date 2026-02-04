@@ -54,7 +54,7 @@ jobs:
           context: .
           file: ./Dockerfile       # anpassen, falls deine Dockerfile woanders liegt
           push: true
-          platforms: linux/amd64,linux/arm64   # optional: Multi-Arch
+          platforms: linux/amd64 #,linux/arm64   # optional: Multi-Arch
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
