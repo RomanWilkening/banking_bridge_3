@@ -44,11 +44,15 @@ RewriteRule ^ index.php [QSA,L]' > /var/www/html/public/.htaccess
 # Install PHP dependencies
 RUN composer install --no-dev --optimize-autoloader --no-interaction
 
-# Create data directory
-RUN mkdir -p /data && chown -R www-data:www-data /data
+# Create data directory with proper permissions
+RUN mkdir -p /data && chown -R www-data:www-data /data && chmod 755 /data
 
 # Set permissions
 RUN chown -R www-data:www-data /var/www/html
+
+# Copy entrypoint script
+COPY docker/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=3s \
@@ -56,4 +60,4 @@ HEALTHCHECK --interval=30s --timeout=3s \
 
 EXPOSE 80
 
-CMD ["apache2-foreground"]
+ENTRYPOINT ["/entrypoint.sh"]
