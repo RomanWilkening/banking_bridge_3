@@ -396,20 +396,45 @@ class FinTSService
     }
 
     /**
+     * Check if the selected TAN mode is decoupled
+     */
+    private function isDecoupledMode(): bool
+    {
+        if ($this->finTs === null) {
+            return false;
+        }
+        
+        try {
+            $tanMode = $this->finTs->getSelectedTanMode();
+            if ($tanMode && method_exists($tanMode, 'isDecoupled')) {
+                return $tanMode->isDecoupled();
+            }
+        } catch (Exception $e) {
+            $this->logger->debug('Could not check TAN mode', ['error' => $e->getMessage()]);
+        }
+        
+        return false;
+    }
+
+    /**
      * Extract TAN request information
      */
     private function extractTanRequest($action): array
     {
         $tanRequest = $action->getTanRequest();
         
-        // Check if this is a decoupled TAN (app confirmation without TAN input)
-        $isDecoupled = false;
-        if (method_exists($tanRequest, 'isDecoupled')) {
-            $isDecoupled = $tanRequest->isDecoupled();
-        }
+        // Check if the selected TAN mode is decoupled (app confirmation without TAN input)
+        $isDecoupled = $this->isDecoupledMode();
+        
+        $challenge = $tanRequest->getChallenge();
+        
+        $this->logger->info('TAN request extracted', [
+            'is_decoupled' => $isDecoupled,
+            'challenge' => substr($challenge ?? '', 0, 100)
+        ]);
         
         return [
-            'challenge' => $tanRequest->getChallenge(),
+            'challenge' => $challenge,
             'challenge_html' => method_exists($tanRequest, 'getChallengeHtml') ? $tanRequest->getChallengeHtml() : null,
             'tan_medium' => method_exists($tanRequest, 'getTanMediumName') ? $tanRequest->getTanMediumName() : null,
             'is_decoupled' => $isDecoupled
