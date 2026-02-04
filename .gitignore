@@ -1,0 +1,28 @@
+# Dependencies
+/app/vendor/
+
+# SQLite Database
+/data/*.db
+/data/*.db-journal
+
+# Logs
+/data/*.log
+
+# Environment files
+.env
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Docker
+docker-compose.override.yml
+
+# Composer
+composer.lock
