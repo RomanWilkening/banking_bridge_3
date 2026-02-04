@@ -16,8 +16,12 @@ return [
         ],
     ],
 
-    Twig::class => function (ContainerInterface $container) {
+    'view' => function (ContainerInterface $container) {
         return Twig::create(__DIR__ . '/../templates', ['cache' => false]);
+    },
+
+    Twig::class => function (ContainerInterface $container) {
+        return $container->get('view');
     },
 
     Logger::class => function (ContainerInterface $container) {
