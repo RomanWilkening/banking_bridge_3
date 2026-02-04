@@ -94,11 +94,15 @@ class ApiController
                 $this->db->upsertAccount($bankId, $accountData);
             }
             
-            // Update session
+            // Update session (before removing from result)
             if (isset($result['persisted_instance'])) {
                 $this->db->saveFinTSSession($bankId, $result['persisted_instance']);
             }
         }
+
+        // Remove large/non-serializable data before JSON response
+        unset($result['persisted_instance']);
+        unset($result['persisted_action']);
 
         return $this->jsonResponse($response, $result);
     }
@@ -181,6 +185,10 @@ class ApiController
             }
         }
 
+        // Remove large/non-serializable data before JSON response
+        unset($result['persisted_instance']);
+        unset($result['persisted_action']);
+
         return $this->jsonResponse($response, $result);
     }
 
@@ -189,9 +197,61 @@ class ApiController
      */
     private function jsonResponse(Response $response, array $data, int $status = 200): Response
     {
-        $response->getBody()->write(json_encode($data, JSON_UNESCAPED_UNICODE));
+        // Remove non-serializable data (like persisted_instance which can be very large)
+        unset($data['persisted_instance']);
+        
+        // Ensure all data is JSON serializable
+        $data = $this->sanitizeForJson($data);
+        
+        $json = json_encode($data, JSON_UNESCAPED_UNICODE | JSON_PARTIAL_OUTPUT_ON_ERROR);
+        
+        if ($json === false) {
+            $this->logger->error('JSON encode failed', ['error' => json_last_error_msg()]);
+            $json = json_encode([
+                'success' => false,
+                'message' => 'Interner Fehler bei der Datenverarbeitung'
+            ]);
+        }
+        
+        $response->getBody()->write($json);
         return $response
             ->withHeader('Content-Type', 'application/json')
             ->withStatus($status);
+    }
+
+    /**
+     * Recursively sanitize data for JSON encoding
+     */
+    private function sanitizeForJson($data)
+    {
+        if (is_array($data)) {
+            $result = [];
+            foreach ($data as $key => $value) {
+                $result[$key] = $this->sanitizeForJson($value);
+            }
+            return $result;
+        }
+        
+        if (is_object($data)) {
+            // Convert objects to string representation or null
+            if (method_exists($data, '__toString')) {
+                return (string) $data;
+            }
+            if ($data instanceof \DateTime || $data instanceof \DateTimeInterface) {
+                return $data->format('Y-m-d H:i:s');
+            }
+            return null;
+        }
+        
+        if (is_resource($data)) {
+            return null;
+        }
+        
+        // Handle non-UTF8 strings
+        if (is_string($data)) {
+            return mb_convert_encoding($data, 'UTF-8', 'UTF-8');
+        }
+        
+        return $data;
     }
 }
