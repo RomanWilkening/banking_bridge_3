@@ -126,16 +126,36 @@ class FinTSService
     }
 
     /**
-     * Select the first available TAN mode
+     * Select the first available TAN mode and medium if required
      */
     private function selectTanMode(): void
     {
         $tanModes = $this->finTs->getTanModes();
-        if (!empty($tanModes)) {
-            // Select the first available TAN mode
-            $selectedMode = reset($tanModes);
-            $this->finTs->selectTanMode($selectedMode);
-            $this->logger->info('Selected TAN mode', ['mode' => $selectedMode->getName()]);
+        if (empty($tanModes)) {
+            $this->logger->warning('No TAN modes available');
+            return;
+        }
+
+        // Select the first available TAN mode
+        $selectedMode = reset($tanModes);
+        $this->finTs->selectTanMode($selectedMode);
+        $this->logger->info('Selected TAN mode', ['mode' => $selectedMode->getName()]);
+
+        // Check if TAN medium is required for this mode
+        if ($selectedMode->needsTanMedium()) {
+            $this->logger->info('TAN medium required, fetching available media');
+            try {
+                $tanMedia = $this->finTs->getTanMedia($selectedMode);
+                if (!empty($tanMedia)) {
+                    $selectedMedium = reset($tanMedia);
+                    $this->finTs->selectTanMedium($selectedMedium);
+                    $this->logger->info('Selected TAN medium', ['medium' => $selectedMedium->getName()]);
+                } else {
+                    $this->logger->warning('No TAN media available');
+                }
+            } catch (Exception $e) {
+                $this->logger->error('Failed to get TAN media', ['error' => $e->getMessage()]);
+            }
         }
     }
 
