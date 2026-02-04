@@ -76,19 +76,7 @@ class FinTSService
         try {
             $this->init($bankConfig);
             
-            // Perform login to test connection
-            $login = $this->finTs->login();
-            
-            if ($login->needsTan()) {
-                // Connection works, but needs TAN - still a success for testing
-                $this->finTs->close();
-                return [
-                    'success' => true,
-                    'message' => 'Verbindung erfolgreich (TAN wird für Aktionen benötigt)'
-                ];
-            }
-            
-            // Get TAN modes for info
+            // Get TAN modes (this tests the connection)
             $tanModes = $this->finTs->getTanModes();
             
             $this->finTs->close();
@@ -125,6 +113,20 @@ class FinTSService
     }
 
     /**
+     * Select the first available TAN mode
+     */
+    private function selectTanMode(): void
+    {
+        $tanModes = $this->finTs->getTanModes();
+        if (!empty($tanModes)) {
+            // Select the first available TAN mode
+            $selectedMode = reset($tanModes);
+            $this->finTs->selectTanMode($selectedMode);
+            $this->logger->info('Selected TAN mode', ['mode' => $selectedMode->getName()]);
+        }
+    }
+
+    /**
      * Get available SEPA accounts
      */
     public function getAccounts(array $bankConfig, ?string $persistedInstance = null): array
@@ -137,6 +139,8 @@ class FinTSService
                 $this->finTs = FinTs::new($options, $credentials, $persistedInstance);
             } else {
                 $this->finTs = FinTs::new($options, $credentials);
+                // Select TAN mode before login (required by phpFinTS)
+                $this->selectTanMode();
             }
 
             // Login first (required before any other action)
