@@ -57,16 +57,16 @@ class ApiController
             ], 404);
         }
 
-        // Check for existing session
-        $session = $this->db->getFinTSSession($bankId);
-        $persistedInstance = $session ? $session['session_data'] : null;
+        // Always start fresh - don't reuse old sessions (they expire quickly)
+        // Delete any old session first
+        $this->db->deleteFinTSSession($bankId);
 
         $result = $this->fintsService->getAccounts([
             'bank_code' => $bank['bank_code'],
             'fints_url' => $bank['fints_url'],
             'username' => $bank['username'],
             'password' => $bank['password']
-        ], $persistedInstance);
+        ], null);
 
         // Handle TAN requirement
         if (isset($result['needs_tan']) && $result['needs_tan']) {
