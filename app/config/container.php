@@ -37,6 +37,11 @@ return [
 
     FinTSService::class => function (ContainerInterface $container) {
         $logger = $container->get(Logger::class);
-        return new FinTSService($logger);
+        $db = $container->get(DatabaseService::class);
+        
+        $service = new FinTSService($logger);
+        $service->setProductId($db->getSetting('fints_product_id'));
+        
+        return $service;
     },
 ];
