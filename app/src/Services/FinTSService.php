@@ -291,12 +291,17 @@ class FinTSService
         $result = [];
 
         foreach ($accounts as $account) {
+            // Build account name from available data
+            $iban = $account->getIban();
+            $accountNumber = $account->getAccountNumber();
+            $accountName = $iban ? 'Konto ' . substr($iban, -4) : 'Konto ' . $accountNumber;
+            
             $accountData = [
-                'account_number' => $account->getAccountNumber(),
-                'iban' => $account->getIban(),
+                'account_number' => $accountNumber,
+                'iban' => $iban,
                 'bic' => $account->getBic(),
-                'account_name' => $account->getAccountOwnerName() ?? 'Konto',
-                'owner_name' => $account->getAccountOwnerName(),
+                'account_name' => $accountName,
+                'owner_name' => null, // Not available in SEPAAccount
                 'currency' => 'EUR',
                 'balance' => null,
                 'balance_date' => null
@@ -311,7 +316,7 @@ class FinTSService
                 }
             } catch (Exception $e) {
                 $this->logger->warning('Could not get balance', [
-                    'account' => $account->getAccountNumber(),
+                    'account' => $accountNumber,
                     'error' => $e->getMessage()
                 ]);
             }
