@@ -76,8 +76,22 @@ class FinTSService
         try {
             $this->init($bankConfig);
             
-            // Try to get TAN modes which requires initial connection
+            // Perform login to test connection
+            $login = $this->finTs->login();
+            
+            if ($login->needsTan()) {
+                // Connection works, but needs TAN - still a success for testing
+                $this->finTs->close();
+                return [
+                    'success' => true,
+                    'message' => 'Verbindung erfolgreich (TAN wird für Aktionen benötigt)'
+                ];
+            }
+            
+            // Get TAN modes for info
             $tanModes = $this->finTs->getTanModes();
+            
+            $this->finTs->close();
             
             return [
                 'success' => true,
@@ -125,6 +139,18 @@ class FinTSService
                 $this->finTs = FinTs::new($options, $credentials);
             }
 
+            // Login first (required before any other action)
+            $login = $this->finTs->login();
+            if ($login->needsTan()) {
+                return [
+                    'success' => false,
+                    'needs_tan' => true,
+                    'tan_request' => $this->extractTanRequest($login),
+                    'persisted_action' => base64_encode(serialize($login)),
+                    'persisted_instance' => $this->finTs->persist()
+                ];
+            }
+
             $getSepaAccounts = GetSEPAAccounts::create();
             $this->finTs->execute($getSepaAccounts);
 
@@ -138,43 +164,7 @@ class FinTSService
                 ];
             }
 
-            $accounts = $getSepaAccounts->getAccounts();
-            $result = [];
-
-            foreach ($accounts as $account) {
-                $accountData = [
-                    'account_number' => $account->getAccountNumber(),
-                    'iban' => $account->getIban(),
-                    'bic' => $account->getBic(),
-                    'account_name' => $account->getAccountOwnerName() ?? 'Konto',
-                    'owner_name' => $account->getAccountOwnerName(),
-                    'currency' => 'EUR',
-                    'balance' => null,
-                    'balance_date' => null
-                ];
-
-                // Try to get balance
-                try {
-                    $balance = $this->getAccountBalance($account);
-                    if ($balance !== null) {
-                        $accountData['balance'] = $balance['amount'];
-                        $accountData['balance_date'] = $balance['date'];
-                    }
-                } catch (Exception $e) {
-                    $this->logger->warning('Could not get balance', [
-                        'account' => $account->getAccountNumber(),
-                        'error' => $e->getMessage()
-                    ]);
-                }
-
-                $result[] = $accountData;
-            }
-
-            return [
-                'success' => true,
-                'accounts' => $result,
-                'persisted_instance' => $this->finTs->persist()
-            ];
+            return $this->processAccountsResult($getSepaAccounts);
 
         } catch (Exception $e) {
             $this->logger->error('Failed to get accounts', ['error' => $e->getMessage()]);
@@ -237,33 +227,34 @@ class FinTSService
 
             // Action completed - check what type of action it was
             if ($action instanceof GetSEPAAccounts) {
-                $accounts = $action->getAccounts();
-                $result = [];
+                return $this->processAccountsResult($action);
+            }
 
-                foreach ($accounts as $account) {
-                    $result[] = [
-                        'account_number' => $account->getAccountNumber(),
-                        'iban' => $account->getIban(),
-                        'bic' => $account->getBic(),
-                        'account_name' => $account->getAccountOwnerName() ?? 'Konto',
-                        'owner_name' => $account->getAccountOwnerName(),
-                        'currency' => 'EUR',
-                        'balance' => null,
-                        'balance_date' => null
+            // If this was a login action, now fetch the accounts
+            // Check if this is a login/dialog action by checking if we can now get accounts
+            try {
+                $getSepaAccounts = GetSEPAAccounts::create();
+                $this->finTs->execute($getSepaAccounts);
+
+                if ($getSepaAccounts->needsTan()) {
+                    return [
+                        'success' => false,
+                        'needs_tan' => true,
+                        'tan_request' => $this->extractTanRequest($getSepaAccounts),
+                        'persisted_action' => base64_encode(serialize($getSepaAccounts)),
+                        'persisted_instance' => $this->finTs->persist()
                     ];
                 }
 
+                return $this->processAccountsResult($getSepaAccounts);
+            } catch (Exception $e) {
+                // If getting accounts fails after login TAN, just report success
+                $this->logger->info('Login TAN accepted, but could not fetch accounts', ['error' => $e->getMessage()]);
                 return [
                     'success' => true,
-                    'accounts' => $result,
-                    'persisted_instance' => $this->finTs->persist()
+                    'message' => 'TAN akzeptiert - bitte Konten erneut abrufen'
                 ];
             }
-
-            return [
-                'success' => true,
-                'message' => 'TAN akzeptiert'
-            ];
 
         } catch (Exception $e) {
             $this->logger->error('TAN submission failed', ['error' => $e->getMessage()]);
@@ -275,16 +266,60 @@ class FinTSService
     }
 
     /**
+     * Process accounts result from GetSEPAAccounts action
+     */
+    private function processAccountsResult(GetSEPAAccounts $action): array
+    {
+        $accounts = $action->getAccounts();
+        $result = [];
+
+        foreach ($accounts as $account) {
+            $accountData = [
+                'account_number' => $account->getAccountNumber(),
+                'iban' => $account->getIban(),
+                'bic' => $account->getBic(),
+                'account_name' => $account->getAccountOwnerName() ?? 'Konto',
+                'owner_name' => $account->getAccountOwnerName(),
+                'currency' => 'EUR',
+                'balance' => null,
+                'balance_date' => null
+            ];
+
+            // Try to get balance
+            try {
+                $balance = $this->getAccountBalance($account);
+                if ($balance !== null) {
+                    $accountData['balance'] = $balance['amount'];
+                    $accountData['balance_date'] = $balance['date'];
+                }
+            } catch (Exception $e) {
+                $this->logger->warning('Could not get balance', [
+                    'account' => $account->getAccountNumber(),
+                    'error' => $e->getMessage()
+                ]);
+            }
+
+            $result[] = $accountData;
+        }
+
+        return [
+            'success' => true,
+            'accounts' => $result,
+            'persisted_instance' => $this->finTs->persist()
+        ];
+    }
+
+    /**
      * Extract TAN request information
      */
-    private function extractTanRequest(BaseAction $action): array
+    private function extractTanRequest($action): array
     {
         $tanRequest = $action->getTanRequest();
         
         return [
             'challenge' => $tanRequest->getChallenge(),
-            'challenge_html' => $tanRequest->getChallengeHtml(),
-            'tan_medium' => $tanRequest->getTanMediumName()
+            'challenge_html' => method_exists($tanRequest, 'getChallengeHtml') ? $tanRequest->getChallengeHtml() : null,
+            'tan_medium' => method_exists($tanRequest, 'getTanMediumName') ? $tanRequest->getTanMediumName() : null
         ];
     }
 
