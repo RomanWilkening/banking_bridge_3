@@ -641,6 +641,9 @@ class FinTSService
 
     /**
      * Process CAMT XML transactions result
+     * 
+     * Uses GetStatementOfAccountXML::getBookedXML() which returns string[]
+     * See: https://github.com/nemiah/phpFinTS/blob/master/lib/Fhp/Action/GetStatementOfAccountXML.php
      */
     private function processTransactionsXMLResult(GetStatementOfAccountXML $action): array
     {
@@ -648,7 +651,21 @@ class FinTSService
         $balance = null;
         $balanceDate = null;
 
-        $xmlStatements = $action->getStatements();
+        // GetStatementOfAccountXML::getBookedXML() returns string[] (array of XML documents)
+        $xmlStatements = $action->getBookedXML();
+        
+        $this->logger->info('Got CAMT XML statements', ['count' => count($xmlStatements)]);
+
+        if (empty($xmlStatements)) {
+            $this->logger->info('No XML statements returned');
+            return [
+                'success' => true,
+                'transactions' => [],
+                'balance' => null,
+                'balance_date' => null,
+                'persisted_instance' => $this->finTs->persist()
+            ];
+        }
         
         foreach ($xmlStatements as $xmlContent) {
             // Parse CAMT XML
@@ -743,13 +760,17 @@ class FinTSService
         $balanceDate = null;
 
         foreach ($soa->getStatements() as $statement) {
-            // Get the end balance from the statement
-            $balance = $statement->getStartBalance();
-            $balanceDate = $statement->getDate()?->format('Y-m-d H:i:s');
+            // Get the end balance from the most recent statement
+            $statementBalance = $statement->getEndBalance();
+            if ($statementBalance !== null) {
+                $balance = $statementBalance;
+                $balanceDate = $statement->getDate()?->format('Y-m-d H:i:s');
+            }
 
             foreach ($statement->getTransactions() as $tx) {
                 $amount = $tx->getAmount();
-                if ($tx->getCreditDebit() === Transaction::CD_DEBIT) {
+                // Transaction::CD_DEBIT = 'debit'
+                if ($tx->getCreditDebit() === 'debit') {
                     $amount = -$amount;
                 }
 
