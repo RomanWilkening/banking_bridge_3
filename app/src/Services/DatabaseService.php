@@ -54,6 +54,8 @@ class DatabaseService
                 bic TEXT,
                 account_name TEXT,
                 owner_name TEXT,
+                account_type TEXT DEFAULT 'checking',
+                sub_account TEXT,
                 currency TEXT DEFAULT 'EUR',
                 balance REAL,
                 balance_date DATETIME,
@@ -61,6 +63,27 @@ class DatabaseService
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (bank_id) REFERENCES banks(id) ON DELETE CASCADE
+            )
+        ");
+        
+        // Securities holdings for depot accounts
+        $this->pdo->exec("
+            CREATE TABLE IF NOT EXISTS securities_holdings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                account_id INTEGER NOT NULL,
+                isin TEXT,
+                wkn TEXT,
+                name TEXT NOT NULL,
+                quantity REAL NOT NULL,
+                currency TEXT DEFAULT 'EUR',
+                current_price REAL,
+                purchase_price REAL,
+                total_value REAL,
+                profit_loss REAL,
+                profit_loss_percent REAL,
+                price_date DATETIME,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE
             )
         ");
 
@@ -138,6 +161,27 @@ class DatabaseService
                 FOREIGN KEY (bank_id) REFERENCES banks(id) ON DELETE CASCADE
             )
         ");
+        
+        // Run migrations for existing databases
+        $this->runMigrations();
+    }
+    
+    /**
+     * Run migrations for existing databases
+     */
+    private function runMigrations(): void
+    {
+        // Add account_type column if it doesn't exist
+        $columns = $this->pdo->query("PRAGMA table_info(accounts)")->fetchAll();
+        $columnNames = array_column($columns, 'name');
+        
+        if (!in_array('account_type', $columnNames)) {
+            $this->pdo->exec("ALTER TABLE accounts ADD COLUMN account_type TEXT DEFAULT 'checking'");
+        }
+        
+        if (!in_array('sub_account', $columnNames)) {
+            $this->pdo->exec("ALTER TABLE accounts ADD COLUMN sub_account TEXT");
+        }
     }
 
     public function getPdo(): PDO
@@ -209,15 +253,21 @@ class DatabaseService
 
     public function upsertAccount(int $bankId, array $data): int
     {
-        // Check if account exists
-        $stmt = $this->pdo->prepare("SELECT id FROM accounts WHERE bank_id = ? AND account_number = ?");
-        $stmt->execute([$bankId, $data['account_number']]);
+        // Check if account exists (consider sub_account for uniqueness)
+        $subAccount = $data['sub_account'] ?? null;
+        if ($subAccount) {
+            $stmt = $this->pdo->prepare("SELECT id FROM accounts WHERE bank_id = ? AND account_number = ? AND sub_account = ?");
+            $stmt->execute([$bankId, $data['account_number'], $subAccount]);
+        } else {
+            $stmt = $this->pdo->prepare("SELECT id FROM accounts WHERE bank_id = ? AND account_number = ? AND (sub_account IS NULL OR sub_account = '')");
+            $stmt->execute([$bankId, $data['account_number']]);
+        }
         $existing = $stmt->fetch();
 
         if ($existing) {
             $stmt = $this->pdo->prepare("
                 UPDATE accounts 
-                SET iban = ?, bic = ?, account_name = ?, owner_name = ?, 
+                SET iban = ?, bic = ?, account_name = ?, owner_name = ?, account_type = ?, sub_account = ?,
                     currency = ?, balance = ?, balance_date = ?, updated_at = CURRENT_TIMESTAMP
                 WHERE id = ?
             ");
@@ -226,6 +276,8 @@ class DatabaseService
                 $data['bic'] ?? null,
                 $data['account_name'] ?? null,
                 $data['owner_name'] ?? null,
+                $data['account_type'] ?? 'checking',
+                $data['sub_account'] ?? null,
                 $data['currency'] ?? 'EUR',
                 $data['balance'] ?? null,
                 $data['balance_date'] ?? null,
@@ -235,8 +287,8 @@ class DatabaseService
         }
 
         $stmt = $this->pdo->prepare("
-            INSERT INTO accounts (bank_id, account_number, iban, bic, account_name, owner_name, currency, balance, balance_date)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO accounts (bank_id, account_number, iban, bic, account_name, owner_name, account_type, sub_account, currency, balance, balance_date)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ");
         $stmt->execute([
             $bankId,
@@ -245,11 +297,95 @@ class DatabaseService
             $data['bic'] ?? null,
             $data['account_name'] ?? null,
             $data['owner_name'] ?? null,
+            $data['account_type'] ?? 'checking',
+            $data['sub_account'] ?? null,
             $data['currency'] ?? 'EUR',
             $data['balance'] ?? null,
             $data['balance_date'] ?? null
         ]);
         return (int) $this->pdo->lastInsertId();
+    }
+    
+    /**
+     * Get depot accounts for a bank
+     */
+    public function getDepotsByBankId(int $bankId): array
+    {
+        $stmt = $this->pdo->prepare("SELECT * FROM accounts WHERE bank_id = ? AND account_type = 'depot' ORDER BY account_name");
+        $stmt->execute([$bankId]);
+        return $stmt->fetchAll();
+    }
+    
+    /**
+     * Get regular (non-depot) accounts for a bank
+     */
+    public function getRegularAccountsByBankId(int $bankId): array
+    {
+        $stmt = $this->pdo->prepare("SELECT * FROM accounts WHERE bank_id = ? AND (account_type IS NULL OR account_type != 'depot') ORDER BY account_name");
+        $stmt->execute([$bankId]);
+        return $stmt->fetchAll();
+    }
+    
+    /**
+     * Save securities holdings for a depot
+     */
+    public function saveSecuritiesHoldings(int $accountId, array $holdings): int
+    {
+        // Delete existing holdings
+        $stmt = $this->pdo->prepare("DELETE FROM securities_holdings WHERE account_id = ?");
+        $stmt->execute([$accountId]);
+        
+        $count = 0;
+        foreach ($holdings as $holding) {
+            $stmt = $this->pdo->prepare("
+                INSERT INTO securities_holdings 
+                (account_id, isin, wkn, name, quantity, currency, current_price, purchase_price, 
+                 total_value, profit_loss, profit_loss_percent, price_date)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ");
+            $stmt->execute([
+                $accountId,
+                $holding['isin'] ?? null,
+                $holding['wkn'] ?? null,
+                $holding['name'],
+                $holding['quantity'],
+                $holding['currency'] ?? 'EUR',
+                $holding['current_price'] ?? null,
+                $holding['purchase_price'] ?? null,
+                $holding['total_value'] ?? null,
+                $holding['profit_loss'] ?? null,
+                $holding['profit_loss_percent'] ?? null,
+                $holding['price_date'] ?? null
+            ]);
+            $count++;
+        }
+        
+        return $count;
+    }
+    
+    /**
+     * Get securities holdings for an account
+     */
+    public function getSecuritiesHoldings(int $accountId): array
+    {
+        $stmt = $this->pdo->prepare("
+            SELECT * FROM securities_holdings 
+            WHERE account_id = ? 
+            ORDER BY total_value DESC
+        ");
+        $stmt->execute([$accountId]);
+        return $stmt->fetchAll();
+    }
+    
+    /**
+     * Get total depot value
+     */
+    public function getDepotTotalValue(int $accountId): ?float
+    {
+        $stmt = $this->pdo->prepare("SELECT SUM(total_value) as total FROM securities_holdings WHERE account_id = ?");
+        $stmt->execute([$accountId]);
+        $result = $stmt->fetch();
+        return $result ? (float) $result['total'] : null;
     }
 
     // Session Methods

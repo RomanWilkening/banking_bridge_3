@@ -29,7 +29,31 @@ class AccountController
             return $response->withStatus(404);
         }
 
-        // Get query parameters for pagination
+        $isDepot = ($account['account_type'] ?? '') === 'depot';
+        
+        if ($isDepot) {
+            // For depots, show holdings
+            $holdings = $this->db->getSecuritiesHoldings($accountId);
+            $totalValue = $this->db->getDepotTotalValue($accountId);
+            
+            // Calculate totals
+            $totalProfitLoss = 0;
+            foreach ($holdings as $holding) {
+                $totalProfitLoss += $holding['profit_loss'] ?? 0;
+            }
+            
+            return $this->view->render($response, 'accounts/depot.twig', [
+                'title' => $account['account_name'] ?? 'Depot',
+                'account' => $account,
+                'bank' => $bank,
+                'holdings' => $holdings,
+                'total_value' => $totalValue,
+                'total_profit_loss' => $totalProfitLoss,
+                'holdings_count' => count($holdings)
+            ]);
+        }
+        
+        // For regular accounts, show transactions
         $params = $request->getQueryParams();
         $page = max(1, (int) ($params['page'] ?? 1));
         $limit = 30;

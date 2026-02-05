@@ -11,6 +11,7 @@ use Fhp\Action\GetSEPAAccounts;
 use Fhp\Action\GetBalance;
 use Fhp\Action\GetStatementOfAccount;
 use Fhp\Action\GetStatementOfAccountXML;
+use Fhp\Action\GetDepotAufstellung;
 use Fhp\Model\StatementOfAccount\Transaction;
 use Fhp\BaseAction;
 use Fhp\CurlException;
@@ -395,7 +396,17 @@ class FinTSService
             // Build account name from available data
             $iban = $account->getIban();
             $accountNumber = $account->getAccountNumber();
-            $accountName = $iban ? 'Konto ' . substr($iban, -4) : 'Konto ' . $accountNumber;
+            $subAccount = method_exists($account, 'getSubAccount') ? $account->getSubAccount() : null;
+            
+            // Detect account type based on available information
+            $accountType = $this->detectAccountType($account);
+            
+            // Generate appropriate account name
+            if ($accountType === 'depot') {
+                $accountName = 'Depot ' . ($subAccount ?: substr($accountNumber, -4));
+            } else {
+                $accountName = $iban ? 'Konto ' . substr($iban, -4) : 'Konto ' . $accountNumber;
+            }
             
             $accountData = [
                 'account_number' => $accountNumber,
@@ -403,23 +414,27 @@ class FinTSService
                 'bic' => $account->getBic(),
                 'account_name' => $accountName,
                 'owner_name' => null, // Not available in SEPAAccount
+                'account_type' => $accountType,
+                'sub_account' => $subAccount,
                 'currency' => 'EUR',
                 'balance' => null,
                 'balance_date' => null
             ];
 
-            // Try to get balance
-            try {
-                $balance = $this->getAccountBalance($account);
-                if ($balance !== null) {
-                    $accountData['balance'] = $balance['amount'];
-                    $accountData['balance_date'] = $balance['date'];
+            // Try to get balance (only for non-depot accounts)
+            if ($accountType !== 'depot') {
+                try {
+                    $balance = $this->getAccountBalance($account);
+                    if ($balance !== null) {
+                        $accountData['balance'] = $balance['amount'];
+                        $accountData['balance_date'] = $balance['date'];
+                    }
+                } catch (Exception $e) {
+                    $this->logger->warning('Could not get balance', [
+                        'account' => $accountNumber,
+                        'error' => $e->getMessage()
+                    ]);
                 }
-            } catch (Exception $e) {
-                $this->logger->warning('Could not get balance', [
-                    'account' => $accountNumber,
-                    'error' => $e->getMessage()
-                ]);
             }
 
             $result[] = $accountData;
@@ -430,6 +445,37 @@ class FinTSService
             'accounts' => $result,
             'persisted_instance' => $this->finTs->persist()
         ];
+    }
+    
+    /**
+     * Detect account type based on SEPAAccount properties
+     */
+    private function detectAccountType(SEPAAccount $account): string
+    {
+        $iban = $account->getIban();
+        $accountNumber = $account->getAccountNumber();
+        $subAccount = method_exists($account, 'getSubAccount') ? $account->getSubAccount() : null;
+        
+        // Depots typically don't have an IBAN
+        if (empty($iban)) {
+            // Check if it looks like a depot number (often numeric, sometimes with leading zeros)
+            if ($subAccount || preg_match('/^[0-9]+$/', $accountNumber)) {
+                return 'depot';
+            }
+        }
+        
+        // Check BPD to see if depot operations are supported for this account
+        // This is a heuristic - accounts without IBAN that support HIWPDS are likely depots
+        try {
+            $bpd = $this->finTs->getBpd();
+            if ($bpd && isset($bpd->parameters['HIWPDS']) && empty($iban)) {
+                return 'depot';
+            }
+        } catch (Exception $e) {
+            // Ignore BPD errors
+        }
+        
+        return 'checking';
     }
 
     /**
@@ -1374,6 +1420,246 @@ class FinTSService
                 'message' => 'Fehler: ' . $e->getMessage()
             ];
         }
+    }
+
+    /**
+     * Get depot holdings (securities/Wertpapierbestand)
+     */
+    public function getDepotHoldings(array $bankConfig, string $accountIdentifier, ?string $persistedInstance = null): array
+    {
+        $this->logger->info('=== getDepotHoldings START ===', ['account' => $accountIdentifier]);
+        
+        try {
+            $options = $this->createOptions($bankConfig);
+            $credentials = $this->createCredentials($bankConfig);
+            
+            if ($persistedInstance) {
+                $this->finTs = FinTs::new($options, $credentials, $persistedInstance);
+            } else {
+                $this->finTs = FinTs::new($options, $credentials);
+                $this->selectTanMode();
+            }
+            
+            // Login
+            $login = $this->finTs->login();
+            if ($login->needsTan()) {
+                $this->logger->info('Login requires TAN for depot fetch');
+                return [
+                    'success' => false,
+                    'needs_tan' => true,
+                    'tan_request' => $this->extractTanRequest($login),
+                    'persisted_action' => base64_encode(serialize($login)),
+                    'persisted_instance' => $this->finTs->persist()
+                ];
+            }
+            
+            // Get SEPA accounts to find the depot
+            $getSepaAccounts = GetSEPAAccounts::create();
+            $this->finTs->execute($getSepaAccounts);
+            
+            if ($getSepaAccounts->needsTan()) {
+                return [
+                    'success' => false,
+                    'needs_tan' => true,
+                    'tan_request' => $this->extractTanRequest($getSepaAccounts),
+                    'persisted_action' => base64_encode(serialize($getSepaAccounts)),
+                    'persisted_instance' => $this->finTs->persist()
+                ];
+            }
+            
+            // Find the matching depot account
+            $depotAccount = null;
+            foreach ($getSepaAccounts->getAccounts() as $acc) {
+                $accNum = $acc->getAccountNumber();
+                $subAcc = method_exists($acc, 'getSubAccount') ? $acc->getSubAccount() : null;
+                
+                // Match by account number or sub-account
+                if ($accNum === $accountIdentifier || $subAcc === $accountIdentifier) {
+                    $depotAccount = $acc;
+                    break;
+                }
+            }
+            
+            if (!$depotAccount) {
+                return [
+                    'success' => false,
+                    'message' => 'Depot nicht gefunden: ' . $accountIdentifier
+                ];
+            }
+            
+            $this->logger->info('Found depot, fetching holdings', [
+                'account_number' => $depotAccount->getAccountNumber()
+            ]);
+            
+            // Check if GetDepotAufstellung is available
+            if (!class_exists(GetDepotAufstellung::class)) {
+                return [
+                    'success' => false,
+                    'message' => 'Depot-Abfrage wird von dieser phpFinTS-Version nicht unterstützt'
+                ];
+            }
+            
+            // Fetch depot holdings
+            try {
+                $getDepot = GetDepotAufstellung::create($depotAccount);
+                $this->finTs->execute($getDepot);
+                
+                if ($getDepot->needsTan()) {
+                    $this->logger->info('GetDepotAufstellung requires TAN');
+                    return [
+                        'success' => false,
+                        'needs_tan' => true,
+                        'tan_request' => $this->extractTanRequest($getDepot),
+                        'persisted_action' => base64_encode(serialize($getDepot)),
+                        'persisted_instance' => $this->finTs->persist()
+                    ];
+                }
+                
+                $holdings = $this->processDepotResult($getDepot);
+                
+                return [
+                    'success' => true,
+                    'holdings' => $holdings,
+                    'persisted_instance' => $this->finTs->persist()
+                ];
+                
+            } catch (\Throwable $e) {
+                $this->logger->error('Depot fetch failed', ['error' => $e->getMessage()]);
+                return [
+                    'success' => false,
+                    'message' => 'Depot-Abfrage fehlgeschlagen: ' . $e->getMessage()
+                ];
+            }
+            
+        } catch (\Throwable $e) {
+            $this->logger->error('getDepotHoldings failed', ['error' => $e->getMessage()]);
+            return [
+                'success' => false,
+                'message' => 'Fehler: ' . $e->getMessage()
+            ];
+        }
+    }
+    
+    /**
+     * Process depot holdings result
+     */
+    private function processDepotResult($action): array
+    {
+        $holdings = [];
+        
+        try {
+            // GetDepotAufstellung returns a collection of holdings
+            // The exact method depends on phpFinTS version
+            if (method_exists($action, 'getPositions')) {
+                $positions = $action->getPositions();
+            } elseif (method_exists($action, 'getHoldings')) {
+                $positions = $action->getHoldings();
+            } elseif (method_exists($action, 'getDepotPositionen')) {
+                $positions = $action->getDepotPositionen();
+            } else {
+                $this->logger->warning('Could not find depot positions method');
+                return [];
+            }
+            
+            foreach ($positions as $position) {
+                $holding = [
+                    'isin' => null,
+                    'wkn' => null,
+                    'name' => 'Unbekanntes Wertpapier',
+                    'quantity' => 0,
+                    'currency' => 'EUR',
+                    'current_price' => null,
+                    'purchase_price' => null,
+                    'total_value' => null,
+                    'profit_loss' => null,
+                    'profit_loss_percent' => null,
+                    'price_date' => null
+                ];
+                
+                // Extract ISIN
+                if (method_exists($position, 'getISIN')) {
+                    $holding['isin'] = $position->getISIN();
+                } elseif (method_exists($position, 'getIsin')) {
+                    $holding['isin'] = $position->getIsin();
+                }
+                
+                // Extract WKN
+                if (method_exists($position, 'getWKN')) {
+                    $holding['wkn'] = $position->getWKN();
+                } elseif (method_exists($position, 'getWkn')) {
+                    $holding['wkn'] = $position->getWkn();
+                }
+                
+                // Extract name
+                if (method_exists($position, 'getName')) {
+                    $holding['name'] = $position->getName();
+                } elseif (method_exists($position, 'getBezeichnung')) {
+                    $holding['name'] = $position->getBezeichnung();
+                }
+                
+                // Extract quantity/units
+                if (method_exists($position, 'getQuantity')) {
+                    $holding['quantity'] = $position->getQuantity();
+                } elseif (method_exists($position, 'getAnzahl')) {
+                    $holding['quantity'] = $position->getAnzahl();
+                } elseif (method_exists($position, 'getUnits')) {
+                    $holding['quantity'] = $position->getUnits();
+                }
+                
+                // Extract current price
+                if (method_exists($position, 'getCurrentPrice')) {
+                    $holding['current_price'] = $position->getCurrentPrice();
+                } elseif (method_exists($position, 'getKurs')) {
+                    $holding['current_price'] = $position->getKurs();
+                } elseif (method_exists($position, 'getPrice')) {
+                    $holding['current_price'] = $position->getPrice();
+                }
+                
+                // Extract total value
+                if (method_exists($position, 'getTotalValue')) {
+                    $holding['total_value'] = $position->getTotalValue();
+                } elseif (method_exists($position, 'getWert')) {
+                    $holding['total_value'] = $position->getWert();
+                } elseif (method_exists($position, 'getValue')) {
+                    $holding['total_value'] = $position->getValue();
+                } elseif ($holding['quantity'] && $holding['current_price']) {
+                    $holding['total_value'] = $holding['quantity'] * $holding['current_price'];
+                }
+                
+                // Extract purchase price
+                if (method_exists($position, 'getPurchasePrice')) {
+                    $holding['purchase_price'] = $position->getPurchasePrice();
+                } elseif (method_exists($position, 'getEinstandskurs')) {
+                    $holding['purchase_price'] = $position->getEinstandskurs();
+                }
+                
+                // Extract price date
+                if (method_exists($position, 'getPriceDate')) {
+                    $date = $position->getPriceDate();
+                    $holding['price_date'] = $date instanceof \DateTime ? $date->format('Y-m-d H:i:s') : $date;
+                } elseif (method_exists($position, 'getKursDatum')) {
+                    $date = $position->getKursDatum();
+                    $holding['price_date'] = $date instanceof \DateTime ? $date->format('Y-m-d H:i:s') : $date;
+                }
+                
+                // Calculate profit/loss if we have the data
+                if ($holding['purchase_price'] && $holding['current_price']) {
+                    $holding['profit_loss'] = ($holding['current_price'] - $holding['purchase_price']) * $holding['quantity'];
+                    if ($holding['purchase_price'] > 0) {
+                        $holding['profit_loss_percent'] = (($holding['current_price'] / $holding['purchase_price']) - 1) * 100;
+                    }
+                }
+                
+                $this->logger->debug('Depot position', $holding);
+                $holdings[] = $holding;
+            }
+            
+        } catch (\Throwable $e) {
+            $this->logger->error('Error processing depot result', ['error' => $e->getMessage()]);
+        }
+        
+        $this->logger->info('Processed depot holdings', ['count' => count($holdings)]);
+        return $holdings;
     }
 
     /**
