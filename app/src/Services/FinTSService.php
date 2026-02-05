@@ -1542,151 +1542,68 @@ class FinTSService
     
     /**
      * Process depot holdings result
+     * Based on phpFinTS GetDepotAufstellung which returns StatementOfHoldings
      */
-    private function processDepotResult($action): array
+    private function processDepotResult(GetDepotAufstellung $action): array
     {
         $holdings = [];
         
         try {
-            // Debug: Log all available methods on the action object
-            $methods = get_class_methods($action);
-            $this->logger->info('GetDepotAufstellung available methods', ['methods' => $methods]);
+            // Get the StatementOfHoldings from the action
+            $statement = $action->getStatement();
             
-            // Also check properties
-            $reflection = new \ReflectionClass($action);
-            $properties = [];
-            foreach ($reflection->getProperties() as $prop) {
-                $properties[] = $prop->getName();
-            }
-            $this->logger->info('GetDepotAufstellung properties', ['properties' => $properties]);
+            // Get total depot value
+            $depotWert = $action->getDepotWert();
+            $this->logger->info('Depot total value from bank', ['depot_wert' => $depotWert]);
             
-            // GetDepotAufstellung returns a collection of holdings
-            // The exact method depends on phpFinTS version
-            $positions = null;
+            // Get holdings from StatementOfHoldings
+            $positions = $statement->getHoldings();
             
-            if (method_exists($action, 'getDepot')) {
-                $depot = $action->getDepot();
-                $this->logger->info('Got depot object', ['type' => is_object($depot) ? get_class($depot) : gettype($depot)]);
-                if ($depot && method_exists($depot, 'getPositionen')) {
-                    $positions = $depot->getPositionen();
-                } elseif ($depot && method_exists($depot, 'getPositions')) {
-                    $positions = $depot->getPositions();
-                } elseif (is_array($depot)) {
-                    $positions = $depot;
-                }
-            } elseif (method_exists($action, 'getPositions')) {
-                $positions = $action->getPositions();
-            } elseif (method_exists($action, 'getHoldings')) {
-                $positions = $action->getHoldings();
-            } elseif (method_exists($action, 'getDepotPositionen')) {
-                $positions = $action->getDepotPositionen();
-            } elseif (method_exists($action, 'getStatement')) {
-                // Maybe it returns statement-like data
-                $positions = $action->getStatement();
-            }
-            
-            if ($positions === null) {
-                $this->logger->warning('Could not find depot positions method', [
-                    'tried' => ['getDepot', 'getPositions', 'getHoldings', 'getDepotPositionen', 'getStatement']
-                ]);
-                return [];
-            }
-            
-            $this->logger->info('Got positions', [
-                'type' => is_array($positions) ? 'array' : (is_object($positions) ? get_class($positions) : gettype($positions)),
-                'count' => is_countable($positions) ? count($positions) : 'not countable'
-            ]);
+            $this->logger->info('Got holdings from statement', ['count' => count($positions)]);
             
             foreach ($positions as $position) {
-                $holding = [
-                    'isin' => null,
-                    'wkn' => null,
-                    'name' => 'Unbekanntes Wertpapier',
-                    'quantity' => 0,
-                    'currency' => 'EUR',
-                    'current_price' => null,
-                    'purchase_price' => null,
-                    'total_value' => null,
-                    'profit_loss' => null,
-                    'profit_loss_percent' => null,
-                    'price_date' => null
-                ];
+                // Holding class methods: getISIN(), getWKN(), getName(), getAmount(), 
+                // getPrice(), getAcquisitionPrice(), getValue(), getCurrency(), getDate()
                 
-                // Extract ISIN
-                if (method_exists($position, 'getISIN')) {
-                    $holding['isin'] = $position->getISIN();
-                } elseif (method_exists($position, 'getIsin')) {
-                    $holding['isin'] = $position->getIsin();
-                }
-                
-                // Extract WKN
-                if (method_exists($position, 'getWKN')) {
-                    $holding['wkn'] = $position->getWKN();
-                } elseif (method_exists($position, 'getWkn')) {
-                    $holding['wkn'] = $position->getWkn();
-                }
-                
-                // Extract name
-                if (method_exists($position, 'getName')) {
-                    $holding['name'] = $position->getName();
-                } elseif (method_exists($position, 'getBezeichnung')) {
-                    $holding['name'] = $position->getBezeichnung();
-                }
-                
-                // Extract quantity/units
-                if (method_exists($position, 'getQuantity')) {
-                    $holding['quantity'] = $position->getQuantity();
-                } elseif (method_exists($position, 'getAnzahl')) {
-                    $holding['quantity'] = $position->getAnzahl();
-                } elseif (method_exists($position, 'getUnits')) {
-                    $holding['quantity'] = $position->getUnits();
-                }
-                
-                // Extract current price
-                if (method_exists($position, 'getCurrentPrice')) {
-                    $holding['current_price'] = $position->getCurrentPrice();
-                } elseif (method_exists($position, 'getKurs')) {
-                    $holding['current_price'] = $position->getKurs();
-                } elseif (method_exists($position, 'getPrice')) {
-                    $holding['current_price'] = $position->getPrice();
-                }
-                
-                // Extract total value
-                if (method_exists($position, 'getTotalValue')) {
-                    $holding['total_value'] = $position->getTotalValue();
-                } elseif (method_exists($position, 'getWert')) {
-                    $holding['total_value'] = $position->getWert();
-                } elseif (method_exists($position, 'getValue')) {
-                    $holding['total_value'] = $position->getValue();
-                } elseif ($holding['quantity'] && $holding['current_price']) {
-                    $holding['total_value'] = $holding['quantity'] * $holding['current_price'];
-                }
-                
-                // Extract purchase price
-                if (method_exists($position, 'getPurchasePrice')) {
-                    $holding['purchase_price'] = $position->getPurchasePrice();
-                } elseif (method_exists($position, 'getEinstandskurs')) {
-                    $holding['purchase_price'] = $position->getEinstandskurs();
-                }
-                
-                // Extract price date
-                if (method_exists($position, 'getPriceDate')) {
-                    $date = $position->getPriceDate();
-                    $holding['price_date'] = $date instanceof \DateTime ? $date->format('Y-m-d H:i:s') : $date;
-                } elseif (method_exists($position, 'getKursDatum')) {
-                    $date = $position->getKursDatum();
-                    $holding['price_date'] = $date instanceof \DateTime ? $date->format('Y-m-d H:i:s') : $date;
-                }
+                $isin = $position->getISIN();
+                $wkn = $position->getWKN();
+                $name = $position->getName() ?? 'Unbekanntes Wertpapier';
+                $quantity = $position->getAmount() ?? 0;
+                $currentPrice = $position->getPrice();
+                $purchasePrice = $position->getAcquisitionPrice();
+                $totalValue = $position->getValue();
+                $currency = $position->getCurrency() ?? 'EUR';
+                $priceDate = $position->getDate();
                 
                 // Calculate profit/loss if we have the data
-                if ($holding['purchase_price'] && $holding['current_price']) {
-                    $holding['profit_loss'] = ($holding['current_price'] - $holding['purchase_price']) * $holding['quantity'];
-                    if ($holding['purchase_price'] > 0) {
-                        $holding['profit_loss_percent'] = (($holding['current_price'] / $holding['purchase_price']) - 1) * 100;
-                    }
+                $profitLoss = null;
+                $profitLossPercent = null;
+                if ($purchasePrice !== null && $currentPrice !== null && $purchasePrice > 0) {
+                    $profitLoss = ($currentPrice - $purchasePrice) * $quantity;
+                    $profitLossPercent = (($currentPrice / $purchasePrice) - 1) * 100;
                 }
                 
-                $this->logger->debug('Depot position', $holding);
+                $holding = [
+                    'isin' => $isin,
+                    'wkn' => $wkn,
+                    'name' => $name,
+                    'quantity' => $quantity,
+                    'currency' => $currency,
+                    'current_price' => $currentPrice,
+                    'purchase_price' => $purchasePrice,
+                    'total_value' => $totalValue,
+                    'profit_loss' => $profitLoss,
+                    'profit_loss_percent' => $profitLossPercent,
+                    'price_date' => $priceDate instanceof \DateTime ? $priceDate->format('Y-m-d H:i:s') : null
+                ];
+                
+                $this->logger->debug('Processed holding', [
+                    'isin' => $isin,
+                    'name' => $name,
+                    'quantity' => $quantity,
+                    'value' => $totalValue
+                ]);
+                
                 $holdings[] = $holding;
             }
             
