@@ -867,6 +867,8 @@ class FinTSService
      */
     private function processTransactionsResult(GetStatementOfAccount $action): array
     {
+        $this->logger->info('=== processTransactionsResult START ===');
+        
         $soa = $action->getStatement();
         $transactions = [];
         $balance = null;
@@ -877,10 +879,17 @@ class FinTSService
         
         // Also log raw MT940 for debugging
         $rawMT940 = $action->getRawMT940();
-        $this->logger->debug('MT940 raw data', [
-            'length' => strlen($rawMT940),
+        $rawLength = strlen($rawMT940);
+        $this->logger->info('MT940 raw data info', [
+            'length' => $rawLength,
+            'is_empty' => $rawLength === 0,
             'sample' => substr($rawMT940, 0, 500)
         ]);
+        
+        // If raw MT940 is empty, log this explicitly
+        if ($rawLength === 0) {
+            $this->logger->warning('MT940: Bank returned empty response - no transaction data');
+        }
 
         foreach ($statements as $stmtIndex => $statement) {
             // Get the end balance from the most recent statement
@@ -967,6 +976,13 @@ class FinTSService
      */
     public function syncAccountTransactions(array $bankConfig, string $accountIdentifier, \DateTime $from, \DateTime $to): array
     {
+        $this->logger->info('=== syncAccountTransactions START ===', [
+            'bank_code' => $bankConfig['bank_code'] ?? 'unknown',
+            'account' => $accountIdentifier,
+            'from' => $from->format('Y-m-d'),
+            'to' => $to->format('Y-m-d')
+        ]);
+        
         try {
             $options = $this->createOptions($bankConfig);
             $credentials = $this->createCredentials($bankConfig);
@@ -1069,6 +1085,7 @@ class FinTSService
             $errors = [];
             
             // Try MT940 first if supported
+            $mt940Result = null;
             if ($supportsMT940) {
                 $this->logger->info('Trying MT940 format');
                 try {
@@ -1086,37 +1103,71 @@ class FinTSService
                         ];
                     }
 
-                    $result = $this->processTransactionsResult($getStatement);
-                    if ($result['success']) {
-                        $this->logger->info('MT940 fetch successful');
-                        return $result;
+                    $mt940Result = $this->processTransactionsResult($getStatement);
+                    if ($mt940Result['success']) {
+                        $txCount = count($mt940Result['transactions'] ?? []);
+                        $this->logger->info('MT940 fetch successful', ['transactions' => $txCount]);
+                        
+                        // If we got transactions, return them
+                        if ($txCount > 0) {
+                            return $mt940Result;
+                        }
+                        // If 0 transactions, try CAMT before returning (might have better data)
+                        $this->logger->info('MT940 returned 0 transactions, will try CAMT as well');
+                    } else {
+                        $errors['MT940'] = $mt940Result['message'] ?? 'Unbekannter Fehler';
                     }
-                    $errors['MT940'] = $result['message'] ?? 'Unbekannter Fehler';
                 } catch (\Throwable $e) {
                     $errors['MT940'] = $e->getMessage();
                     $this->logger->info('MT940 fetch failed', ['error' => $e->getMessage()]);
                 }
             }
 
-            // Try CAMT XML if supported (and MT940 didn't work or wasn't available)
+            // Try CAMT XML if supported (and MT940 didn't work, had errors, or returned 0 transactions)
+            $camtResult = null;
             if ($supportsCAMT) {
                 $this->logger->info('Trying CAMT XML format');
                 try {
-                    $result = $this->fetchTransactionsXML($sepaAccount, $from, $to);
+                    $camtResult = $this->fetchTransactionsXML($sepaAccount, $from, $to);
                     
-                    if (isset($result['success']) && $result['success']) {
-                        $this->logger->info('CAMT XML fetch successful');
-                        return $result;
+                    if (isset($camtResult['success']) && $camtResult['success']) {
+                        $txCount = count($camtResult['transactions'] ?? []);
+                        $this->logger->info('CAMT XML fetch successful', ['transactions' => $txCount]);
+                        
+                        // If CAMT has transactions, return it
+                        if ($txCount > 0) {
+                            return $camtResult;
+                        }
                     }
-                    if (isset($result['needs_tan']) && $result['needs_tan']) {
-                        return $result;
+                    if (isset($camtResult['needs_tan']) && $camtResult['needs_tan']) {
+                        return $camtResult;
                     }
                     
-                    $errors['CAMT'] = $result['message'] ?? 'Unbekannter Fehler';
+                    if (!($camtResult['success'] ?? false)) {
+                        $errors['CAMT'] = $camtResult['message'] ?? 'Unbekannter Fehler';
+                    }
                 } catch (\Throwable $e) {
                     $errors['CAMT'] = $e->getMessage();
                     $this->logger->warning('CAMT XML fetch failed', ['error' => $e->getMessage()]);
                 }
+            }
+
+            // If MT940 was successful (even with 0 transactions), return that result
+            // This ensures we at least get balance info, etc.
+            if ($mt940Result !== null && ($mt940Result['success'] ?? false)) {
+                $this->logger->info('Returning MT940 result (may have 0 transactions)', [
+                    'transactions' => count($mt940Result['transactions'] ?? []),
+                    'balance' => $mt940Result['balance'] ?? null
+                ]);
+                return $mt940Result;
+            }
+            
+            // Same for CAMT
+            if ($camtResult !== null && ($camtResult['success'] ?? false)) {
+                $this->logger->info('Returning CAMT result (may have 0 transactions)', [
+                    'transactions' => count($camtResult['transactions'] ?? [])
+                ]);
+                return $camtResult;
             }
 
             // Both formats failed or neither was available
