@@ -648,7 +648,46 @@ class FinTSService
         $balance = null;
         $balanceDate = null;
 
-        $xmlStatements = $action->getStatements();
+        // Try different method names depending on phpFinTS version
+        $xmlStatements = [];
+        
+        if (method_exists($action, 'getBookedStatements')) {
+            $xmlStatements = $action->getBookedStatements() ?? [];
+            $this->logger->info('Using getBookedStatements()');
+        } elseif (method_exists($action, 'getStatements')) {
+            $xmlStatements = $action->getStatements() ?? [];
+            $this->logger->info('Using getStatements()');
+        } elseif (method_exists($action, 'getBookedXml')) {
+            $xml = $action->getBookedXml();
+            if ($xml) {
+                $xmlStatements = [$xml];
+            }
+            $this->logger->info('Using getBookedXml()');
+        } elseif (method_exists($action, 'getCamtStatements')) {
+            $xmlStatements = $action->getCamtStatements() ?? [];
+            $this->logger->info('Using getCamtStatements()');
+        } else {
+            // Log available methods for debugging
+            $methods = get_class_methods($action);
+            $this->logger->warning('No known method found on GetStatementOfAccountXML', [
+                'available_methods' => $methods
+            ]);
+            return [
+                'success' => false,
+                'message' => 'CAMT XML Verarbeitung nicht unterstützt (keine bekannte Methode gefunden)'
+            ];
+        }
+
+        if (empty($xmlStatements)) {
+            $this->logger->info('No XML statements returned');
+            return [
+                'success' => true,
+                'transactions' => [],
+                'balance' => null,
+                'balance_date' => null,
+                'persisted_instance' => $this->finTs->persist()
+            ];
+        }
         
         foreach ($xmlStatements as $xmlContent) {
             // Parse CAMT XML
