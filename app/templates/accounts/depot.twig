@@ -1,0 +1,347 @@
+{% extends "layout.twig" %}
+
+{% block content %}
+<div x-data="depotDetails({{ account.id }}, {{ account.bank_id }})" class="space-y-6">
+    <!-- Depot Header -->
+    <div class="bg-white shadow rounded-lg overflow-hidden">
+        <div class="px-4 py-5 sm:px-6 flex justify-between items-center border-b border-gray-200">
+            <div class="flex items-center">
+                <span class="inline-flex items-center justify-center h-14 w-14 rounded-full bg-purple-100">
+                    <span class="text-2xl">📈</span>
+                </span>
+                <div class="ml-4">
+                    <h3 class="text-lg font-medium text-gray-900">{{ account.account_name ?? 'Depot' }}</h3>
+                    <p class="text-sm text-gray-500">Depot {{ account.account_number }}</p>
+                    <p class="text-xs text-gray-400">{{ bank.name }}</p>
+                </div>
+            </div>
+            <div class="text-right">
+                {% if total_value is not null %}
+                <p class="text-2xl font-bold text-gray-900">
+                    {{ total_value|number_format(2, ',', '.') }} {{ account.currency }}
+                </p>
+                <p class="text-sm {% if total_profit_loss >= 0 %}text-green-600{% else %}text-red-600{% endif %}">
+                    {% if total_profit_loss >= 0 %}+{% endif %}{{ total_profit_loss|number_format(2, ',', '.') }} {{ account.currency }}
+                </p>
+                {% if account.balance_date %}
+                <p class="text-xs text-gray-400">Stand: {{ account.balance_date|date('d.m.Y H:i') }}</p>
+                {% endif %}
+                {% else %}
+                <p class="text-lg text-gray-400">Kein Bestand</p>
+                {% endif %}
+            </div>
+        </div>
+        
+        <div class="px-4 py-3 bg-gray-50 flex justify-between items-center">
+            <div>
+                <span class="text-sm text-gray-500">{{ holdings_count }} Positionen</span>
+            </div>
+            <button @click="syncHoldings" :disabled="syncing"
+                    class="inline-flex items-center rounded-md bg-purple-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-purple-500 disabled:opacity-50">
+                <span x-show="syncing" class="loading-spinner mr-2"></span>
+                <span x-text="syncing ? 'Synchronisiere...' : 'Depotbestand abrufen'"></span>
+            </button>
+        </div>
+    </div>
+
+    <!-- TAN Modal -->
+    <div x-show="showTanModal" x-cloak 
+         class="fixed inset-0 z-50 overflow-y-auto" 
+         aria-labelledby="modal-title" role="dialog" aria-modal="true">
+        <div class="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
+            <div class="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity" @click="closeModal"></div>
+            <span class="hidden sm:inline-block sm:align-middle sm:h-screen">&#8203;</span>
+            <div class="inline-block align-bottom bg-white rounded-lg px-4 pt-5 pb-4 text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full sm:p-6">
+                <div>
+                    <div class="mx-auto flex items-center justify-center h-12 w-12 rounded-full" :class="isDecoupled ? 'bg-blue-100' : 'bg-yellow-100'">
+                        <span class="text-2xl" x-text="isDecoupled ? '📱' : '🔐'"></span>
+                    </div>
+                    <div class="mt-3 text-center sm:mt-5">
+                        <h3 class="text-lg leading-6 font-medium text-gray-900" x-text="isDecoupled ? 'App-Bestätigung erforderlich' : 'TAN-Eingabe erforderlich'"></h3>
+                        <div class="mt-2">
+                            <p class="text-sm text-gray-500" x-text="tanRequest?.challenge"></p>
+                        </div>
+                        
+                        <div x-show="isDecoupled" class="mt-6">
+                            <div class="flex justify-center">
+                                <div class="loading-spinner" style="width: 40px; height: 40px; border-width: 4px;"></div>
+                            </div>
+                            <p class="mt-4 text-sm text-gray-600">Warte auf Bestätigung in der Banking-App...</p>
+                        </div>
+                        
+                        <div x-show="!isDecoupled" class="mt-4">
+                            <input type="text" x-model="tanInput" @keyup.enter="submitTan"
+                                   class="block w-full rounded-md border-gray-300 shadow-sm focus:border-purple-500 focus:ring-purple-500 sm:text-sm border px-3 py-2 text-center text-lg tracking-widest"
+                                   placeholder="TAN eingeben" autofocus>
+                        </div>
+                    </div>
+                </div>
+                <div class="mt-5 sm:mt-6">
+                    <button x-show="!isDecoupled" type="button" @click="submitTan" :disabled="submittingTan"
+                            class="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-purple-600 text-base font-medium text-white hover:bg-purple-700 sm:text-sm disabled:opacity-50 mb-3">
+                        <span x-show="submittingTan" class="loading-spinner mr-2"></span>
+                        Bestätigen
+                    </button>
+                    <button type="button" @click="closeModal"
+                            class="w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 sm:text-sm">
+                        Abbrechen
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Messages -->
+    <div x-show="message" x-cloak>
+        <div x-show="message?.type === 'success'" class="rounded-md bg-green-50 p-4">
+            <div class="flex">
+                <div class="flex-shrink-0">
+                    <svg class="h-5 w-5 text-green-400" viewBox="0 0 20 20" fill="currentColor">
+                        <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.857-9.809a.75.75 0 00-1.214-.882l-3.483 4.79-1.88-1.88a.75.75 0 10-1.06 1.061l2.5 2.5a.75.75 0 001.137-.089l4-5.5z" clip-rule="evenodd" />
+                    </svg>
+                </div>
+                <div class="ml-3">
+                    <p class="text-sm font-medium text-green-800" x-text="message?.text"></p>
+                </div>
+            </div>
+        </div>
+        <div x-show="message?.type === 'error'" class="rounded-md bg-red-50 p-4">
+            <div class="flex">
+                <div class="flex-shrink-0">
+                    <svg class="h-5 w-5 text-red-400" viewBox="0 0 20 20" fill="currentColor">
+                        <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.28 7.22a.75.75 0 00-1.06 1.06L8.94 10l-1.72 1.72a.75.75 0 101.06 1.06L10 11.06l1.72 1.72a.75.75 0 101.06-1.06L11.06 10l1.72-1.72a.75.75 0 00-1.06-1.06L10 8.94 8.28 7.22z" clip-rule="evenodd" />
+                    </svg>
+                </div>
+                <div class="ml-3">
+                    <p class="text-sm font-medium text-red-800" x-text="message?.text"></p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Holdings List -->
+    <div class="bg-white shadow rounded-lg">
+        <div class="px-4 py-5 sm:px-6 border-b border-gray-200">
+            <h3 class="text-lg font-medium leading-6 text-gray-900">Wertpapierbestand</h3>
+        </div>
+        
+        {% if holdings|length > 0 %}
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-gray-200">
+                <thead class="bg-gray-50">
+                    <tr>
+                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Wertpapier</th>
+                        <th scope="col" class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Anzahl</th>
+                        <th scope="col" class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Kurs</th>
+                        <th scope="col" class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Wert</th>
+                        <th scope="col" class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Gewinn/Verlust</th>
+                    </tr>
+                </thead>
+                <tbody class="bg-white divide-y divide-gray-200">
+                    {% for holding in holdings %}
+                    <tr class="hover:bg-gray-50">
+                        <td class="px-6 py-4 text-sm text-gray-900">
+                            <div class="font-medium">{{ holding.name }}</div>
+                            <div class="text-xs text-gray-400">
+                                {% if holding.isin %}ISIN: {{ holding.isin }}{% endif %}
+                                {% if holding.wkn %} | WKN: {{ holding.wkn }}{% endif %}
+                            </div>
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm text-right text-gray-900">
+                            {{ holding.quantity|number_format(4, ',', '.') }}
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm text-right text-gray-500">
+                            {% if holding.current_price %}
+                            {{ holding.current_price|number_format(2, ',', '.') }} {{ holding.currency }}
+                            {% if holding.price_date %}
+                            <div class="text-xs text-gray-400">{{ holding.price_date|date('d.m.Y') }}</div>
+                            {% endif %}
+                            {% else %}
+                            -
+                            {% endif %}
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm text-right font-medium text-gray-900">
+                            {% if holding.total_value %}
+                            {{ holding.total_value|number_format(2, ',', '.') }} {{ holding.currency }}
+                            {% else %}
+                            -
+                            {% endif %}
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm text-right font-medium">
+                            {% if holding.profit_loss is not null %}
+                            <span class="{% if holding.profit_loss >= 0 %}text-green-600{% else %}text-red-600{% endif %}">
+                                {% if holding.profit_loss >= 0 %}+{% endif %}{{ holding.profit_loss|number_format(2, ',', '.') }} {{ holding.currency }}
+                            </span>
+                            {% if holding.profit_loss_percent is not null %}
+                            <div class="text-xs {% if holding.profit_loss_percent >= 0 %}text-green-500{% else %}text-red-500{% endif %}">
+                                ({% if holding.profit_loss_percent >= 0 %}+{% endif %}{{ holding.profit_loss_percent|number_format(2, ',', '.') }}%)
+                            </div>
+                            {% endif %}
+                            {% else %}
+                            <span class="text-gray-400">-</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+                <tfoot class="bg-gray-50">
+                    <tr>
+                        <td colspan="3" class="px-6 py-4 text-sm font-medium text-gray-900">Gesamt</td>
+                        <td class="px-6 py-4 text-sm text-right font-bold text-gray-900">
+                            {{ total_value|number_format(2, ',', '.') }} EUR
+                        </td>
+                        <td class="px-6 py-4 text-sm text-right font-bold {% if total_profit_loss >= 0 %}text-green-600{% else %}text-red-600{% endif %}">
+                            {% if total_profit_loss >= 0 %}+{% endif %}{{ total_profit_loss|number_format(2, ',', '.') }} EUR
+                        </td>
+                    </tr>
+                </tfoot>
+            </table>
+        </div>
+
+        {% else %}
+        <div class="px-4 py-12 text-center">
+            <span class="text-4xl">📊</span>
+            <p class="mt-2 text-sm text-gray-500">Noch kein Depotbestand</p>
+            <p class="text-sm text-gray-400">Klicken Sie auf "Depotbestand abrufen" um die Wertpapiere von der Bank zu laden</p>
+        </div>
+        {% endif %}
+    </div>
+
+    <!-- Back Link -->
+    <div>
+        <a href="/banks/{{ bank.id }}" class="text-sm text-purple-600 hover:text-purple-500">← Zurück zur Bank</a>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function depotDetails(accountId, bankId) {
+    return {
+        accountId: accountId,
+        bankId: bankId,
+        syncing: false,
+        showTanModal: false,
+        tanRequest: null,
+        tanInput: '',
+        submittingTan: false,
+        isDecoupled: false,
+        pollingInterval: null,
+        message: null,
+
+        async syncHoldings() {
+            this.syncing = true;
+            this.message = null;
+
+            try {
+                const response = await fetch(`/api/accounts/${this.accountId}/depot`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    }
+                });
+                const data = await response.json();
+
+                if (data.needs_tan) {
+                    this.tanRequest = data.tan_request;
+                    this.isDecoupled = data.tan_request?.is_decoupled || false;
+                    this.showTanModal = true;
+                    
+                    if (this.isDecoupled) {
+                        this.startDecoupledPolling();
+                    }
+                } else if (data.success) {
+                    this.message = { type: 'success', text: `${data.count} Wertpapiere synchronisiert!` };
+                    setTimeout(() => location.reload(), 1500);
+                } else {
+                    this.message = { type: 'error', text: data.message || 'Fehler beim Synchronisieren' };
+                }
+            } catch (error) {
+                this.message = { type: 'error', text: 'Netzwerkfehler: ' + error.message };
+            }
+
+            this.syncing = false;
+        },
+
+        startDecoupledPolling() {
+            this.pollingInterval = setInterval(() => this.checkDecoupledStatus(), 3000);
+        },
+
+        stopDecoupledPolling() {
+            if (this.pollingInterval) {
+                clearInterval(this.pollingInterval);
+                this.pollingInterval = null;
+            }
+        },
+
+        async checkDecoupledStatus() {
+            try {
+                const response = await fetch(`/api/banks/${this.bankId}/decoupled`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                const data = await response.json();
+
+                if (data.status === 'pending') {
+                    // Continue polling
+                } else if (data.success) {
+                    this.stopDecoupledPolling();
+                    this.showTanModal = false;
+                    this.message = { type: 'success', text: 'Depotbestand synchronisiert!' };
+                    setTimeout(() => location.reload(), 1500);
+                } else if (!data.needs_tan) {
+                    this.stopDecoupledPolling();
+                    this.showTanModal = false;
+                    this.message = { type: 'error', text: data.message || 'Fehler' };
+                }
+            } catch (error) {
+                console.error('Polling error:', error);
+            }
+        },
+
+        async submitTan() {
+            if (!this.tanInput.trim()) return;
+            
+            this.submittingTan = true;
+
+            try {
+                const response = await fetch(`/api/banks/${this.bankId}/tan`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ tan: this.tanInput })
+                });
+                const data = await response.json();
+
+                if (data.needs_tan) {
+                    this.tanRequest = data.tan_request;
+                    this.isDecoupled = data.tan_request?.is_decoupled || false;
+                    this.tanInput = '';
+                    if (this.isDecoupled) {
+                        this.startDecoupledPolling();
+                    }
+                } else if (data.success) {
+                    this.showTanModal = false;
+                    this.syncHoldings();
+                } else {
+                    this.message = { type: 'error', text: data.message || 'TAN-Fehler' };
+                    this.showTanModal = false;
+                }
+            } catch (error) {
+                this.message = { type: 'error', text: 'Netzwerkfehler: ' + error.message };
+                this.showTanModal = false;
+            }
+
+            this.submittingTan = false;
+            this.tanInput = '';
+        },
+
+        closeModal() {
+            this.stopDecoupledPolling();
+            this.showTanModal = false;
+            this.tanInput = '';
+            this.isDecoupled = false;
+        }
+    }
+}
+</script>
+{% endblock %}

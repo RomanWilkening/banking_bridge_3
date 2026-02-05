@@ -523,6 +523,119 @@ class ApiController
             'cached' => false
         ]);
     }
+    
+    /**
+     * Sync depot holdings from bank
+     */
+    public function syncDepotHoldings(Request $request, Response $response, array $args): Response
+    {
+        $this->logger->info('=== SYNC DEPOT STARTED ===', ['args' => $args]);
+        
+        $accountId = (int) $args['id'];
+        $account = $this->db->getAccountById($accountId);
+        
+        if (!$account) {
+            return $this->jsonResponse($response, [
+                'success' => false,
+                'message' => 'Konto nicht gefunden'
+            ], 404);
+        }
+        
+        if (($account['account_type'] ?? '') !== 'depot') {
+            return $this->jsonResponse($response, [
+                'success' => false,
+                'message' => 'Dieses Konto ist kein Depot'
+            ], 400);
+        }
+        
+        $bank = $this->db->getBankById($account['bank_id']);
+        if (!$bank) {
+            return $this->jsonResponse($response, [
+                'success' => false,
+                'message' => 'Bank nicht gefunden'
+            ], 404);
+        }
+        
+        // Delete old session to ensure fresh start
+        $this->db->deleteFinTSSession($bank['id']);
+        
+        $result = $this->fintsService->getDepotHoldings(
+            [
+                'bank_code' => $bank['bank_code'],
+                'fints_url' => $bank['fints_url'],
+                'username' => $bank['username'],
+                'password' => $bank['password']
+            ],
+            $account['account_number']
+        );
+        
+        // Handle TAN requirement
+        if (isset($result['needs_tan']) && $result['needs_tan']) {
+            $this->db->saveFinTSSession($bank['id'], $result['persisted_instance']);
+            $_SESSION['fints_action_' . $bank['id']] = $result['persisted_action'];
+            $_SESSION['fints_depot_account_id'] = $accountId;
+            
+            return $this->jsonResponse($response, [
+                'success' => false,
+                'needs_tan' => true,
+                'tan_request' => $result['tan_request']
+            ]);
+        }
+        
+        if (!$result['success']) {
+            return $this->jsonResponse($response, $result);
+        }
+        
+        // Save holdings to database
+        if (isset($result['holdings'])) {
+            $count = $this->db->saveSecuritiesHoldings($accountId, $result['holdings']);
+            $this->logger->info('Saved depot holdings', ['count' => $count, 'account_id' => $accountId]);
+            
+            // Update depot total value as balance
+            $totalValue = $this->db->getDepotTotalValue($accountId);
+            if ($totalValue !== null) {
+                $this->db->updateAccountBalance($accountId, $totalValue, date('Y-m-d H:i:s'));
+            }
+        }
+        
+        // Save session
+        if (isset($result['persisted_instance'])) {
+            $this->db->saveFinTSSession($bank['id'], $result['persisted_instance']);
+        }
+        
+        return $this->jsonResponse($response, [
+            'success' => true,
+            'message' => 'Depotbestand synchronisiert',
+            'count' => count($result['holdings'] ?? []),
+            'total_value' => $this->db->getDepotTotalValue($accountId)
+        ]);
+    }
+    
+    /**
+     * Get depot holdings from database
+     */
+    public function getDepotHoldings(Request $request, Response $response, array $args): Response
+    {
+        $accountId = (int) $args['id'];
+        $account = $this->db->getAccountById($accountId);
+        
+        if (!$account) {
+            return $this->jsonResponse($response, [
+                'success' => false,
+                'message' => 'Konto nicht gefunden'
+            ], 404);
+        }
+        
+        $holdings = $this->db->getSecuritiesHoldings($accountId);
+        $totalValue = $this->db->getDepotTotalValue($accountId);
+        
+        return $this->jsonResponse($response, [
+            'success' => true,
+            'holdings' => $holdings,
+            'total_value' => $totalValue,
+            'count' => count($holdings)
+        ]);
+    }
 
     /**
      * Helper to create JSON response

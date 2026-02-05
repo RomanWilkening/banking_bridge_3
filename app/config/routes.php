@@ -31,4 +31,6 @@ return function (App $app) {
     $app->post('/api/banks/{id}/decoupled', [ApiController::class, 'checkDecoupled'])->setName('api.banks.decoupled');
     $app->get('/api/accounts/{id}/transactions', [ApiController::class, 'getTransactions'])->setName('api.accounts.transactions');
     $app->post('/api/accounts/{id}/sync', [ApiController::class, 'syncAccount'])->setName('api.accounts.sync');
+    $app->post('/api/accounts/{id}/depot', [ApiController::class, 'syncDepotHoldings'])->setName('api.accounts.depot');
+    $app->get('/api/accounts/{id}/holdings', [ApiController::class, 'getDepotHoldings'])->setName('api.accounts.holdings');
 };
