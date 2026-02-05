@@ -172,51 +172,84 @@ class FinTSService
     public function getAccounts(array $bankConfig, ?string $persistedInstance = null): array
     {
         try {
-            $options = $this->createOptions($bankConfig);
-            $credentials = $this->createCredentials($bankConfig);
-            
-            if ($persistedInstance) {
-                $this->finTs = FinTs::new($options, $credentials, $persistedInstance);
-            } else {
-                $this->finTs = FinTs::new($options, $credentials);
-                // Select TAN mode before login (required by phpFinTS)
-                $this->selectTanMode();
-            }
-
-            // Login first (required before any other action)
-            $login = $this->finTs->login();
-            if ($login->needsTan()) {
-                return [
-                    'success' => false,
-                    'needs_tan' => true,
-                    'tan_request' => $this->extractTanRequest($login),
-                    'persisted_action' => base64_encode(serialize($login)),
-                    'persisted_instance' => $this->finTs->persist()
-                ];
-            }
-
-            $getSepaAccounts = GetSEPAAccounts::create();
-            $this->finTs->execute($getSepaAccounts);
-
-            if ($getSepaAccounts->needsTan()) {
-                return [
-                    'success' => false,
-                    'needs_tan' => true,
-                    'tan_request' => $this->extractTanRequest($getSepaAccounts),
-                    'persisted_action' => base64_encode(serialize($getSepaAccounts)),
-                    'persisted_instance' => $this->finTs->persist()
-                ];
-            }
-
-            return $this->processAccountsResult($getSepaAccounts);
-
+            return $this->doGetAccounts($bankConfig, $persistedInstance);
         } catch (Exception $e) {
-            $this->logger->error('Failed to get accounts', ['error' => $e->getMessage()]);
+            // If session-related error and we had a persisted instance, retry with fresh session
+            $errorMessage = $e->getMessage();
+            if ($persistedInstance && (
+                strpos($errorMessage, 'Dialogkontext') !== false ||
+                strpos($errorMessage, 'Dialog') !== false ||
+                strpos($errorMessage, 'session') !== false
+            )) {
+                $this->logger->info('Session expired, starting fresh connection');
+                try {
+                    return $this->doGetAccounts($bankConfig, null);
+                } catch (Exception $retryException) {
+                    $this->logger->error('Retry also failed', ['error' => $retryException->getMessage()]);
+                    return [
+                        'success' => false,
+                        'message' => 'Fehler beim Abrufen der Konten: ' . $retryException->getMessage()
+                    ];
+                }
+            }
+            
+            $this->logger->error('Failed to get accounts', ['error' => $errorMessage]);
             return [
                 'success' => false,
-                'message' => 'Fehler beim Abrufen der Konten: ' . $e->getMessage()
+                'message' => 'Fehler beim Abrufen der Konten: ' . $errorMessage
             ];
         }
+    }
+
+    /**
+     * Internal method to get accounts
+     */
+    private function doGetAccounts(array $bankConfig, ?string $persistedInstance): array
+    {
+        $options = $this->createOptions($bankConfig);
+        $credentials = $this->createCredentials($bankConfig);
+        
+        if ($persistedInstance) {
+            $this->logger->info('Reusing persisted FinTS instance');
+            $this->finTs = FinTs::new($options, $credentials, $persistedInstance);
+        } else {
+            $this->logger->info('Creating new FinTS instance');
+            $this->finTs = FinTs::new($options, $credentials);
+            // Select TAN mode before login (required by phpFinTS)
+            $this->selectTanMode();
+        }
+
+        // Login first (required before any other action)
+        $login = $this->finTs->login();
+        if ($login->needsTan()) {
+            $this->logger->info('Login requires TAN');
+            return [
+                'success' => false,
+                'needs_tan' => true,
+                'tan_request' => $this->extractTanRequest($login),
+                'persisted_action' => base64_encode(serialize($login)),
+                'persisted_instance' => $this->finTs->persist()
+            ];
+        }
+
+        $this->logger->info('Login successful without TAN');
+
+        $getSepaAccounts = GetSEPAAccounts::create();
+        $this->finTs->execute($getSepaAccounts);
+
+        if ($getSepaAccounts->needsTan()) {
+            $this->logger->info('GetSEPAAccounts requires TAN');
+            return [
+                'success' => false,
+                'needs_tan' => true,
+                'tan_request' => $this->extractTanRequest($getSepaAccounts),
+                'persisted_action' => base64_encode(serialize($getSepaAccounts)),
+                'persisted_instance' => $this->finTs->persist()
+            ];
+        }
+
+        $this->logger->info('Accounts fetched successfully without TAN');
+        return $this->processAccountsResult($getSepaAccounts);
     }
 
     /**

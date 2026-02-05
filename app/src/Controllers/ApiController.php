@@ -57,16 +57,21 @@ class ApiController
             ], 404);
         }
 
-        // Always start fresh - don't reuse old sessions (they expire quickly)
-        // Delete any old session first
-        $this->db->deleteFinTSSession($bankId);
+        // Try to reuse existing session (allows TAN-free access within 90-day window)
+        $session = $this->db->getFinTSSession($bankId);
+        $persistedInstance = $session ? $session['session_data'] : null;
+        
+        $this->logger->info('Fetching accounts', [
+            'bank_id' => $bankId,
+            'has_session' => $persistedInstance !== null
+        ]);
 
         $result = $this->fintsService->getAccounts([
             'bank_code' => $bank['bank_code'],
             'fints_url' => $bank['fints_url'],
             'username' => $bank['username'],
             'password' => $bank['password']
-        ], null);
+        ], $persistedInstance);
 
         // Handle TAN requirement
         if (isset($result['needs_tan']) && $result['needs_tan']) {
