@@ -641,6 +641,9 @@ class FinTSService
 
     /**
      * Process CAMT XML transactions result
+     * 
+     * Uses GetStatementOfAccountXML::getBookedXML() which returns string[]
+     * See: https://github.com/nemiah/phpFinTS/blob/master/lib/Fhp/Action/GetStatementOfAccountXML.php
      */
     private function processTransactionsXMLResult(GetStatementOfAccountXML $action): array
     {
@@ -648,35 +651,10 @@ class FinTSService
         $balance = null;
         $balanceDate = null;
 
-        // Try different method names depending on phpFinTS version
-        $xmlStatements = [];
+        // GetStatementOfAccountXML::getBookedXML() returns string[] (array of XML documents)
+        $xmlStatements = $action->getBookedXML();
         
-        if (method_exists($action, 'getBookedStatements')) {
-            $xmlStatements = $action->getBookedStatements() ?? [];
-            $this->logger->info('Using getBookedStatements()');
-        } elseif (method_exists($action, 'getStatements')) {
-            $xmlStatements = $action->getStatements() ?? [];
-            $this->logger->info('Using getStatements()');
-        } elseif (method_exists($action, 'getBookedXml')) {
-            $xml = $action->getBookedXml();
-            if ($xml) {
-                $xmlStatements = [$xml];
-            }
-            $this->logger->info('Using getBookedXml()');
-        } elseif (method_exists($action, 'getCamtStatements')) {
-            $xmlStatements = $action->getCamtStatements() ?? [];
-            $this->logger->info('Using getCamtStatements()');
-        } else {
-            // Log available methods for debugging
-            $methods = get_class_methods($action);
-            $this->logger->warning('No known method found on GetStatementOfAccountXML', [
-                'available_methods' => $methods
-            ]);
-            return [
-                'success' => false,
-                'message' => 'CAMT XML Verarbeitung nicht unterstützt (keine bekannte Methode gefunden)'
-            ];
-        }
+        $this->logger->info('Got CAMT XML statements', ['count' => count($xmlStatements)]);
 
         if (empty($xmlStatements)) {
             $this->logger->info('No XML statements returned');
@@ -782,13 +760,17 @@ class FinTSService
         $balanceDate = null;
 
         foreach ($soa->getStatements() as $statement) {
-            // Get the end balance from the statement
-            $balance = $statement->getStartBalance();
-            $balanceDate = $statement->getDate()?->format('Y-m-d H:i:s');
+            // Get the end balance from the most recent statement
+            $statementBalance = $statement->getEndBalance();
+            if ($statementBalance !== null) {
+                $balance = $statementBalance;
+                $balanceDate = $statement->getDate()?->format('Y-m-d H:i:s');
+            }
 
             foreach ($statement->getTransactions() as $tx) {
                 $amount = $tx->getAmount();
-                if ($tx->getCreditDebit() === Transaction::CD_DEBIT) {
+                // Transaction::CD_DEBIT = 'debit'
+                if ($tx->getCreditDebit() === 'debit') {
                     $amount = -$amount;
                 }
 
