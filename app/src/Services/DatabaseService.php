@@ -205,9 +205,10 @@ class DatabaseService
         $stmt = $this->pdo->prepare("DELETE FROM fints_sessions WHERE bank_id = ?");
         $stmt->execute([$bankId]);
 
+        // Store session for 90 days (PSD2 allows TAN-free access within this window)
         $stmt = $this->pdo->prepare("
             INSERT INTO fints_sessions (bank_id, session_data, tan_mode, tan_medium, expires_at)
-            VALUES (?, ?, ?, ?, datetime('now', '+30 minutes'))
+            VALUES (?, ?, ?, ?, datetime('now', '+90 days'))
         ");
         $stmt->execute([$bankId, $sessionData, $tanMode, $tanMedium]);
         return (int) $this->pdo->lastInsertId();
