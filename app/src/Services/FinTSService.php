@@ -672,6 +672,95 @@ class FinTSService
     }
 
     /**
+     * Sync account transactions - combined method that handles everything in one session
+     */
+    public function syncAccountTransactions(array $bankConfig, string $accountIdentifier, \DateTime $from, \DateTime $to): array
+    {
+        try {
+            $options = $this->createOptions($bankConfig);
+            $credentials = $this->createCredentials($bankConfig);
+            
+            // Always start fresh
+            $this->finTs = FinTs::new($options, $credentials);
+            $this->selectTanMode();
+
+            // Login
+            $login = $this->finTs->login();
+            if ($login->needsTan()) {
+                $this->logger->info('Login requires TAN for sync');
+                return [
+                    'success' => false,
+                    'needs_tan' => true,
+                    'tan_request' => $this->extractTanRequest($login),
+                    'persisted_action' => base64_encode(serialize($login)),
+                    'persisted_instance' => $this->finTs->persist()
+                ];
+            }
+
+            // Get SEPA accounts
+            $getSepaAccounts = GetSEPAAccounts::create();
+            $this->finTs->execute($getSepaAccounts);
+
+            if ($getSepaAccounts->needsTan()) {
+                $this->logger->info('GetSEPAAccounts requires TAN');
+                return [
+                    'success' => false,
+                    'needs_tan' => true,
+                    'tan_request' => $this->extractTanRequest($getSepaAccounts),
+                    'persisted_action' => base64_encode(serialize($getSepaAccounts)),
+                    'persisted_instance' => $this->finTs->persist()
+                ];
+            }
+
+            // Find the matching account
+            $sepaAccount = null;
+            foreach ($getSepaAccounts->getAccounts() as $acc) {
+                if ($acc->getIban() === $accountIdentifier || $acc->getAccountNumber() === $accountIdentifier) {
+                    $sepaAccount = $acc;
+                    break;
+                }
+            }
+
+            if (!$sepaAccount) {
+                return [
+                    'success' => false,
+                    'message' => 'Konto nicht gefunden: ' . $accountIdentifier
+                ];
+            }
+
+            $this->logger->info('Fetching transactions', [
+                'account' => $sepaAccount->getIban(),
+                'from' => $from->format('Y-m-d'),
+                'to' => $to->format('Y-m-d')
+            ]);
+
+            // Get statement of account (transactions)
+            $getStatement = GetStatementOfAccount::create($sepaAccount, $from, $to);
+            $this->finTs->execute($getStatement);
+
+            if ($getStatement->needsTan()) {
+                $this->logger->info('GetStatementOfAccount requires TAN');
+                return [
+                    'success' => false,
+                    'needs_tan' => true,
+                    'tan_request' => $this->extractTanRequest($getStatement),
+                    'persisted_action' => base64_encode(serialize($getStatement)),
+                    'persisted_instance' => $this->finTs->persist()
+                ];
+            }
+
+            return $this->processTransactionsResult($getStatement);
+
+        } catch (Exception $e) {
+            $this->logger->error('Sync failed', ['error' => $e->getMessage()]);
+            return [
+                'success' => false,
+                'message' => 'Fehler: ' . $e->getMessage()
+            ];
+        }
+    }
+
+    /**
      * Get TAN modes
      */
     public function getTanModes(array $bankConfig): array

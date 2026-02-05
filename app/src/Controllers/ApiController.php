@@ -348,81 +348,26 @@ class ApiController
         $from = isset($data['from']) ? new \DateTime($data['from']) : new \DateTime('-30 days');
         $to = isset($data['to']) ? new \DateTime($data['to']) : new \DateTime();
 
-        // Get session
-        $session = $this->db->getFinTSSession($bank['id']);
-        $persistedInstance = $session ? $session['session_data'] : null;
+        // Always start fresh for sync to avoid session issues
+        $this->db->deleteFinTSSession($bank['id']);
 
-        // First, we need to get the SEPAAccount object
-        // We'll do this by fetching accounts first
-        $accountsResult = $this->fintsService->getAccounts([
-            'bank_code' => $bank['bank_code'],
-            'fints_url' => $bank['fints_url'],
-            'username' => $bank['username'],
-            'password' => $bank['password']
-        ], $persistedInstance);
-
-        if (isset($accountsResult['needs_tan'])) {
-            $this->db->saveFinTSSession($bank['id'], $accountsResult['persisted_instance']);
-            $_SESSION['fints_action_' . $bank['id']] = $accountsResult['persisted_action'];
-            $_SESSION['fints_sync_account_id'] = $accountId;
-            $_SESSION['fints_sync_from'] = $from->format('Y-m-d');
-            $_SESSION['fints_sync_to'] = $to->format('Y-m-d');
-            
-            return $this->jsonResponse($response, [
-                'success' => false,
-                'needs_tan' => true,
-                'tan_request' => $accountsResult['tan_request']
-            ]);
-        }
-
-        if (!$accountsResult['success']) {
-            return $this->jsonResponse($response, $accountsResult);
-        }
-
-        // Save session
-        if (isset($accountsResult['persisted_instance'])) {
-            $this->db->saveFinTSSession($bank['id'], $accountsResult['persisted_instance']);
-        }
-
-        // Now fetch transactions using a fresh connection with the SEPA account
-        $sepaAccounts = $this->getSepaAccountsFromBank($bank, $persistedInstance);
-        if (!$sepaAccounts['success']) {
-            return $this->jsonResponse($response, $sepaAccounts);
-        }
-
-        // Find the matching account
-        $sepaAccount = null;
-        foreach ($sepaAccounts['accounts'] as $sa) {
-            if ($sa->getIban() === $account['iban'] || $sa->getAccountNumber() === $account['account_number']) {
-                $sepaAccount = $sa;
-                break;
-            }
-        }
-
-        if (!$sepaAccount) {
-            return $this->jsonResponse($response, [
-                'success' => false,
-                'message' => 'Konto bei der Bank nicht gefunden'
-            ]);
-        }
-
-        // Now fetch transactions
-        $result = $this->fintsService->getTransactions(
+        // Use the combined sync method in FinTSService
+        $result = $this->fintsService->syncAccountTransactions(
             [
                 'bank_code' => $bank['bank_code'],
                 'fints_url' => $bank['fints_url'],
                 'username' => $bank['username'],
                 'password' => $bank['password']
             ],
-            $sepaAccount,
+            $account['iban'] ?? $account['account_number'],
             $from,
-            $to,
-            $sepaAccounts['persisted_instance'] ?? null
+            $to
         );
 
         if (isset($result['needs_tan'])) {
             $this->db->saveFinTSSession($bank['id'], $result['persisted_instance']);
             $_SESSION['fints_action_' . $bank['id']] = $result['persisted_action'];
+            $_SESSION['fints_sync_account_id'] = $accountId;
             
             return $this->jsonResponse($response, [
                 'success' => false,
@@ -447,7 +392,7 @@ class ApiController
             $this->db->updateAccountBalance($accountId, $result['balance'], $result['balance_date'] ?? null);
         }
 
-        // Save session
+        // Save session for future use
         if (isset($result['persisted_instance'])) {
             $this->db->saveFinTSSession($bank['id'], $result['persisted_instance']);
         }
@@ -458,80 +403,6 @@ class ApiController
             'count' => count($result['transactions'] ?? []),
             'balance' => $result['balance'] ?? null
         ]);
-    }
-
-    /**
-     * Helper to get SEPA accounts with their objects
-     */
-    private function getSepaAccountsFromBank(array $bank, ?string $persistedInstance): array
-    {
-        try {
-            $options = new \Fhp\Options\FinTsOptions();
-            $options->url = $bank['fints_url'];
-            $options->bankCode = $bank['bank_code'];
-            $productId = $this->db->getSetting('fints_product_id');
-            if (empty($productId)) {
-                return ['success' => false, 'message' => 'FinTS Produkt-ID nicht konfiguriert'];
-            }
-            $options->productName = $productId;
-            $options->productVersion = '1.0.0';
-            
-            $credentials = \Fhp\Options\Credentials::create($bank['username'], $bank['password']);
-            
-            if ($persistedInstance) {
-                $finTs = \Fhp\FinTs::new($options, $credentials, $persistedInstance);
-            } else {
-                $finTs = \Fhp\FinTs::new($options, $credentials);
-                // Select TAN mode
-                $tanModes = $finTs->getTanModes();
-                if (!empty($tanModes)) {
-                    $selectedMode = reset($tanModes);
-                    if (method_exists($selectedMode, 'needsTanMedium') && $selectedMode->needsTanMedium()) {
-                        $tanMedia = $finTs->getTanMedia($selectedMode);
-                        if (!empty($tanMedia)) {
-                            $finTs->selectTanMode($selectedMode, reset($tanMedia));
-                        } else {
-                            $finTs->selectTanMode($selectedMode);
-                        }
-                    } else {
-                        $finTs->selectTanMode($selectedMode);
-                    }
-                }
-            }
-
-            $login = $finTs->login();
-            if ($login->needsTan()) {
-                return [
-                    'success' => false,
-                    'needs_tan' => true,
-                    'persisted_instance' => $finTs->persist()
-                ];
-            }
-
-            $getSepaAccounts = \Fhp\Action\GetSEPAAccounts::create();
-            $finTs->execute($getSepaAccounts);
-
-            if ($getSepaAccounts->needsTan()) {
-                return [
-                    'success' => false,
-                    'needs_tan' => true,
-                    'persisted_instance' => $finTs->persist()
-                ];
-            }
-
-            return [
-                'success' => true,
-                'accounts' => $getSepaAccounts->getAccounts(),
-                'persisted_instance' => $finTs->persist()
-            ];
-
-        } catch (\Exception $e) {
-            $this->logger->error('Failed to get SEPA accounts', ['error' => $e->getMessage()]);
-            return [
-                'success' => false,
-                'message' => 'Fehler: ' . $e->getMessage()
-            ];
-        }
     }
 
     /**
