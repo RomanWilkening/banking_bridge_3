@@ -325,6 +325,8 @@ class ApiController
      */
     public function syncAccount(Request $request, Response $response, array $args): Response
     {
+        $this->logger->info('=== SYNC ACCOUNT STARTED ===', ['args' => $args]);
+        
         $accountId = (int) $args['id'];
         $account = $this->db->getAccountById($accountId);
         

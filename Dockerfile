@@ -18,6 +18,12 @@ RUN apt-get update && apt-get install -y \
 # Enable Apache mod_rewrite
 RUN a2enmod rewrite
 
+# Configure PHP to log errors to stderr (for docker logs)
+RUN echo "error_reporting = E_ALL" >> /usr/local/etc/php/conf.d/custom.ini && \
+    echo "display_errors = Off" >> /usr/local/etc/php/conf.d/custom.ini && \
+    echo "log_errors = On" >> /usr/local/etc/php/conf.d/custom.ini && \
+    echo "error_log = /dev/stderr" >> /usr/local/etc/php/conf.d/custom.ini
+
 # Install Composer
 COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
 

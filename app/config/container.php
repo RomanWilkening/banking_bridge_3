@@ -26,7 +26,10 @@ return [
 
     Logger::class => function (ContainerInterface $container) {
         $logger = new Logger('app');
+        // Log to file
         $logger->pushHandler(new StreamHandler('/data/app.log', Logger::DEBUG));
+        // Also log to stdout (for docker-compose logs)
+        $logger->pushHandler(new StreamHandler('php://stdout', Logger::DEBUG));
         return $logger;
     },
 
