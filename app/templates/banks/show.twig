@@ -107,6 +107,146 @@
         </div>
     </div>
 
+    <!-- Bank Capabilities Card -->
+    <div class="bg-white shadow rounded-lg overflow-hidden" x-data="bankCapabilities({{ bank.id }})">
+        <div class="px-4 py-5 sm:px-6 border-b border-gray-200 flex justify-between items-center">
+            <div>
+                <h3 class="text-lg font-medium leading-6 text-gray-900">FinTS-Fähigkeiten</h3>
+                <p class="mt-1 text-sm text-gray-500">Unterstützte Funktionen dieser Bank</p>
+            </div>
+            <button @click="fetchCapabilities" :disabled="loading"
+                    class="inline-flex items-center rounded-md bg-gray-100 px-3 py-2 text-sm font-semibold text-gray-700 shadow-sm hover:bg-gray-200 disabled:opacity-50">
+                <span x-show="loading" class="loading-spinner mr-2"></span>
+                <span x-text="loading ? 'Lade...' : (capabilities ? '↻ Aktualisieren' : 'Abrufen')"></span>
+            </button>
+        </div>
+        
+        <div class="px-4 py-5 sm:px-6">
+            <!-- Not loaded yet -->
+            <div x-show="!capabilities && !loading && !error" class="text-center py-4">
+                <p class="text-sm text-gray-500">Klicken Sie auf "Abrufen" um die Bankfähigkeiten zu laden.</p>
+            </div>
+            
+            <!-- Error -->
+            <div x-show="error" class="rounded-md bg-red-50 p-4">
+                <p class="text-sm text-red-700" x-text="error"></p>
+            </div>
+            
+            <!-- Capabilities loaded -->
+            <div x-show="capabilities" x-cloak class="space-y-6">
+                <!-- Quick Status Badges -->
+                <div class="flex flex-wrap gap-2">
+                    <span x-show="capabilities?.supports_psd2" 
+                          class="inline-flex items-center rounded-full bg-blue-100 px-3 py-1 text-sm font-medium text-blue-800">
+                        PSD2
+                    </span>
+                    <span x-show="capabilities?.transactions_supported" 
+                          class="inline-flex items-center rounded-full bg-green-100 px-3 py-1 text-sm font-medium text-green-800">
+                        ✓ Transaktionen
+                    </span>
+                    <span x-show="!capabilities?.transactions_supported" 
+                          class="inline-flex items-center rounded-full bg-red-100 px-3 py-1 text-sm font-medium text-red-800">
+                        ✗ Transaktionen
+                    </span>
+                </div>
+
+                <!-- Read Operations -->
+                <div>
+                    <h4 class="text-sm font-semibold text-gray-900 mb-3 flex items-center">
+                        <span class="mr-2">📖</span> Lesezugriff
+                    </h4>
+                    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                        <template x-for="(feature, key) in capabilities?.read" :key="key">
+                            <div class="border rounded-lg p-3" :class="feature.supported ? 'border-green-200 bg-green-50' : (feature.available ? 'border-yellow-200 bg-yellow-50' : 'border-gray-200 bg-gray-50')">
+                                <div class="flex items-center justify-between">
+                                    <span class="text-sm font-medium text-gray-900" x-text="getFeatureName('read', key)"></span>
+                                    <span x-show="feature.supported" class="text-green-600 text-sm">✓</span>
+                                    <span x-show="!feature.supported && feature.available" class="text-yellow-600 text-sm" title="Bank unterstützt, aber nicht von phpFinTS">⚠</span>
+                                    <span x-show="!feature.available" class="text-gray-400 text-sm">—</span>
+                                </div>
+                                <p class="text-xs text-gray-500 mt-1">
+                                    Bank: <span x-text="feature.bank_versions?.length ? feature.bank_versions.join(', ') : '—'"></span>
+                                    <span class="text-gray-400 ml-1">(Lib: <span x-text="feature.library_versions?.join(', ')"></span>)</span>
+                                </p>
+                            </div>
+                        </template>
+                    </div>
+                </div>
+
+                <!-- Transfer Operations -->
+                <div>
+                    <h4 class="text-sm font-semibold text-gray-900 mb-3 flex items-center">
+                        <span class="mr-2">💸</span> Überweisungen
+                    </h4>
+                    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                        <template x-for="(feature, key) in capabilities?.transfers" :key="key">
+                            <div class="border rounded-lg p-3" :class="feature.supported ? 'border-green-200 bg-green-50' : (feature.available ? 'border-yellow-200 bg-yellow-50' : 'border-gray-200 bg-gray-50')">
+                                <div class="flex items-center justify-between">
+                                    <span class="text-sm font-medium text-gray-900" x-text="getFeatureName('transfers', key)"></span>
+                                    <span x-show="feature.supported" class="text-green-600 text-sm">✓</span>
+                                    <span x-show="!feature.supported && feature.available" class="text-yellow-600 text-sm" title="Bank unterstützt, aber nicht von phpFinTS">⚠</span>
+                                    <span x-show="!feature.available" class="text-gray-400 text-sm">—</span>
+                                </div>
+                                <p class="text-xs text-gray-500 mt-1">
+                                    Bank: <span x-text="feature.bank_versions?.length ? feature.bank_versions.join(', ') : '—'"></span>
+                                </p>
+                            </div>
+                        </template>
+                    </div>
+                </div>
+
+                <!-- Direct Debit Operations -->
+                <div>
+                    <h4 class="text-sm font-semibold text-gray-900 mb-3 flex items-center">
+                        <span class="mr-2">📥</span> Lastschriften
+                    </h4>
+                    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                        <template x-for="(feature, key) in capabilities?.direct_debits" :key="key">
+                            <div class="border rounded-lg p-3" :class="feature.supported ? 'border-green-200 bg-green-50' : (feature.available ? 'border-yellow-200 bg-yellow-50' : 'border-gray-200 bg-gray-50')">
+                                <div class="flex items-center justify-between">
+                                    <span class="text-sm font-medium text-gray-900" x-text="getFeatureName('direct_debits', key)"></span>
+                                    <span x-show="feature.supported" class="text-green-600 text-sm">✓</span>
+                                    <span x-show="!feature.supported && feature.available" class="text-yellow-600 text-sm" title="Bank unterstützt, aber nicht von phpFinTS">⚠</span>
+                                    <span x-show="!feature.available" class="text-gray-400 text-sm">—</span>
+                                </div>
+                                <p class="text-xs text-gray-500 mt-1">
+                                    Bank: <span x-text="feature.bank_versions?.length ? feature.bank_versions.join(', ') : '—'"></span>
+                                </p>
+                            </div>
+                        </template>
+                    </div>
+                </div>
+
+                <!-- Legend & Bank Info -->
+                <div class="pt-4 border-t border-gray-200">
+                    <div class="flex flex-wrap gap-4 text-xs text-gray-500 mb-3">
+                        <span><span class="text-green-600">✓</span> = Unterstützt</span>
+                        <span><span class="text-yellow-600">⚠</span> = Bank unterstützt, phpFinTS nicht</span>
+                        <span><span class="text-gray-400">—</span> = Nicht verfügbar</span>
+                    </div>
+                    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                        <div>
+                            <span class="text-gray-500">Bank (BPD):</span>
+                            <span class="ml-1 text-gray-900" x-text="capabilities?.bank_name_from_bpd || capabilities?.bank_name || '-'"></span>
+                        </div>
+                        <div>
+                            <span class="text-gray-500">BPD-Version:</span>
+                            <span class="ml-1 text-gray-900" x-text="capabilities?.bpd_version || '-'"></span>
+                        </div>
+                        <div>
+                            <span class="text-gray-500">TAN-Verfahren:</span>
+                            <span class="ml-1 text-gray-900" x-text="capabilities?.tan_modes?.length || 0"></span>
+                        </div>
+                        <div x-show="cached">
+                            <span class="text-gray-500">Cache:</span>
+                            <span class="ml-1 text-gray-400" x-text="cacheInfo"></span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Error/Success Messages -->
     <div x-show="message" x-cloak>
         <div x-show="message?.type === 'success'" class="rounded-md bg-green-50 p-4">
@@ -201,6 +341,83 @@
 
 {% block scripts %}
 <script>
+function bankCapabilities(bankId) {
+    return {
+        bankId: bankId,
+        loading: false,
+        capabilities: null,
+        error: null,
+        cached: false,
+        cacheInfo: '',
+
+        // Feature name translations
+        featureNames: {
+            read: {
+                transactions_mt940: 'Transaktionen (MT940)',
+                transactions_camt: 'Transaktionen (CAMT)',
+                balance: 'Kontostand',
+                sepa_accounts: 'SEPA-Konten',
+                depot: 'Depot/Wertpapiere'
+            },
+            transfers: {
+                sepa_single: 'SEPA-Überweisung',
+                sepa_batch: 'SEPA-Sammelüberweisung',
+                sepa_scheduled: 'Terminüberweisung',
+                sepa_scheduled_batch: 'Termin-Sammelüberweisung',
+                instant: 'Echtzeit-Überweisung',
+                international: 'Auslandsüberweisung'
+            },
+            direct_debits: {
+                sepa_single: 'SEPA-Lastschrift',
+                sepa_batch: 'SEPA-Sammellastschrift',
+                sepa_b2b_single: 'B2B-Lastschrift',
+                sepa_b2b_batch: 'B2B-Sammellastschrift'
+            }
+        },
+
+        init() {
+            // Auto-load capabilities on page load
+            this.fetchCapabilities();
+        },
+
+        getFeatureName(category, key) {
+            return this.featureNames[category]?.[key] || key;
+        },
+
+        async fetchCapabilities(forceRefresh = false) {
+            this.loading = true;
+            this.error = null;
+
+            try {
+                const url = `/api/banks/${this.bankId}/capabilities` + (forceRefresh ? '?refresh=1' : '');
+                const response = await fetch(url);
+                const data = await response.json();
+
+                if (data.success) {
+                    this.capabilities = data.capabilities;
+                    this.cached = data.cached || false;
+                    
+                    if (data.cache_age) {
+                        const hours = Math.floor(data.cache_age / 3600);
+                        const minutes = Math.floor((data.cache_age % 3600) / 60);
+                        this.cacheInfo = hours > 0 ? `vor ${hours}h ${minutes}m` : `vor ${minutes}m`;
+                    }
+                    
+                    if (data.refresh_error) {
+                        this.error = 'Hinweis: ' + data.refresh_error + ' (zeige gecachte Daten)';
+                    }
+                } else {
+                    this.error = data.message || 'Fehler beim Laden der Bankfähigkeiten';
+                }
+            } catch (error) {
+                this.error = 'Netzwerkfehler: ' + error.message;
+            }
+
+            this.loading = false;
+        }
+    }
+}
+
 function bankDetails(bankId) {
     return {
         bankId: bankId,

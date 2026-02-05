@@ -990,4 +990,122 @@ class FinTSService
             $this->finTs = null;
         }
     }
+
+    /**
+     * Fetch Bank Parameter Data (BPD) and extract supported capabilities
+     * 
+     * This queries the bank to find out which FinTS features it supports.
+     */
+    public function getBankCapabilities(array $bankConfig): array
+    {
+        try {
+            $options = $this->createOptions($bankConfig);
+            
+            // Fetch BPD without credentials (anonymous)
+            $bpd = FinTs::fetchBpd($options);
+            
+            $capabilities = [
+                'bank_name' => $bpd->getBankName(),
+                'bpd_version' => $bpd->getVersion(),
+                'supports_psd2' => $bpd->supportsPsd2(),
+                'tan_modes' => [],
+                'all_parameters' => [],
+                
+                // Read operations
+                'read' => [
+                    'transactions_mt940' => $this->extractFeature($bpd, 'HIKAZS', [4, 5, 6, 7]),
+                    'transactions_camt' => $this->extractFeature($bpd, 'HICAZS', [1]),
+                    'balance' => $this->extractFeature($bpd, 'HISALS', [4, 5, 6, 7]),
+                    'sepa_accounts' => $this->extractFeature($bpd, 'HISPAS', [1, 2, 3]),
+                    'depot' => $this->extractFeature($bpd, 'HIWPDS', [5]),
+                ],
+                
+                // SEPA Transfers
+                'transfers' => [
+                    'sepa_single' => $this->extractFeature($bpd, 'HICCSS', [1]),
+                    'sepa_batch' => $this->extractFeature($bpd, 'HICCMS', [1]),
+                    'sepa_scheduled' => $this->extractFeature($bpd, 'HICSES', [1]),
+                    'sepa_scheduled_batch' => $this->extractFeature($bpd, 'HICMES', [1]),
+                    'instant' => $this->extractFeature($bpd, 'HIIPZS', [1, 2]),
+                    'international' => $this->extractFeature($bpd, 'HIAUBS', [9]),
+                ],
+                
+                // SEPA Direct Debits
+                'direct_debits' => [
+                    'sepa_single' => $this->extractFeature($bpd, 'HIDSES', [1, 2]),
+                    'sepa_batch' => $this->extractFeature($bpd, 'HIDMES', [1, 2]),
+                    'sepa_b2b_single' => $this->extractFeature($bpd, 'HIBSES', [1, 2]),
+                    'sepa_b2b_batch' => $this->extractFeature($bpd, 'HIBMES', [1, 2]),
+                ],
+            ];
+
+            // Legacy fields for backward compatibility
+            $capabilities['mt940_versions'] = $capabilities['read']['transactions_mt940']['bank_versions'];
+            $capabilities['camt_versions'] = $capabilities['read']['transactions_camt']['bank_versions'];
+            $capabilities['mt940_supported'] = $capabilities['read']['transactions_mt940']['supported'];
+            $capabilities['camt_supported'] = $capabilities['read']['transactions_camt']['supported'];
+            $capabilities['transactions_supported'] = $capabilities['mt940_supported'] || $capabilities['camt_supported'];
+            $capabilities['supports_balance'] = $capabilities['read']['balance']['supported'];
+            $capabilities['balance_versions'] = $capabilities['read']['balance']['bank_versions'];
+            $capabilities['supports_sepa_accounts'] = $capabilities['read']['sepa_accounts']['supported'];
+
+            // Get all parameter segment names for reference
+            foreach ($bpd->parameters as $segmentName => $versions) {
+                $capabilities['all_parameters'][$segmentName] = array_keys($versions);
+            }
+
+            // Get TAN modes
+            foreach ($bpd->allTanModes as $id => $mode) {
+                $capabilities['tan_modes'][] = [
+                    'id' => $mode->getId(),
+                    'name' => $mode->getName(),
+                    'is_decoupled' => method_exists($mode, 'isDecoupled') ? $mode->isDecoupled() : false,
+                ];
+            }
+
+            $this->logger->info('Bank capabilities fetched', [
+                'bank' => $capabilities['bank_name'],
+                'transactions_mt940' => $capabilities['read']['transactions_mt940'],
+                'transactions_camt' => $capabilities['read']['transactions_camt'],
+            ]);
+
+            return [
+                'success' => true,
+                'capabilities' => $capabilities
+            ];
+
+        } catch (Exception $e) {
+            $this->logger->error('Failed to fetch BPD', ['error' => $e->getMessage()]);
+            return [
+                'success' => false,
+                'message' => 'Fehler beim Abrufen der Bankparameter: ' . $e->getMessage()
+            ];
+        }
+    }
+
+    /**
+     * Extract feature information from BPD
+     */
+    private function extractFeature($bpd, string $segmentName, array $librarySupports): array
+    {
+        $params = $bpd->parameters[$segmentName] ?? [];
+        $bankVersions = array_keys($params);
+        sort($bankVersions);
+        
+        $supported = false;
+        foreach ($bankVersions as $version) {
+            if (in_array((int)$version, $librarySupports)) {
+                $supported = true;
+                break;
+            }
+        }
+        
+        return [
+            'available' => !empty($bankVersions),
+            'supported' => $supported,
+            'bank_versions' => $bankVersions,
+            'library_versions' => $librarySupports,
+        ];
+    }
+
 }
