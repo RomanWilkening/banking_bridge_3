@@ -10,10 +10,12 @@ use Fhp\Model\SEPAAccount;
 use Fhp\Action\GetSEPAAccounts;
 use Fhp\Action\GetBalance;
 use Fhp\Action\GetStatementOfAccount;
+use Fhp\Action\GetStatementOfAccountXML;
 use Fhp\Model\StatementOfAccount\Transaction;
 use Fhp\BaseAction;
 use Fhp\CurlException;
 use Fhp\Protocol\ServerException;
+use Fhp\UnsupportedException;
 use Monolog\Logger;
 use Exception;
 
@@ -607,6 +609,293 @@ class FinTSService
     }
 
     /**
+     * Fetch transactions using CAMT XML format
+     */
+    private function fetchTransactionsXML(SEPAAccount $account, \DateTime $from, \DateTime $to): array
+    {
+        try {
+            $getStatement = GetStatementOfAccountXML::create($account, $from, $to);
+            $this->finTs->execute($getStatement);
+
+            if ($getStatement->needsTan()) {
+                $this->logger->info('GetStatementOfAccountXML requires TAN');
+                return [
+                    'success' => false,
+                    'needs_tan' => true,
+                    'tan_request' => $this->extractTanRequest($getStatement),
+                    'persisted_action' => base64_encode(serialize($getStatement)),
+                    'persisted_instance' => $this->finTs->persist()
+                ];
+            }
+
+            return $this->processTransactionsResultXML($getStatement);
+
+        } catch (Exception $e) {
+            $this->logger->error('CAMT XML fetch failed', ['error' => $e->getMessage()]);
+            return [
+                'success' => false,
+                'message' => 'Transaktionsabruf nicht unterstützt: ' . $e->getMessage()
+            ];
+        }
+    }
+
+    /**
+     * Process transactions result from GetStatementOfAccountXML (CAMT format)
+     */
+    private function processTransactionsResultXML(GetStatementOfAccountXML $action): array
+    {
+        $transactions = [];
+        $balance = null;
+        $balanceDate = null;
+
+        try {
+            $xmlStatements = $action->getStatements();
+            
+            foreach ($xmlStatements as $xmlContent) {
+                // Parse CAMT XML
+                $parsed = $this->parseCamtXml($xmlContent);
+                if ($parsed) {
+                    $transactions = array_merge($transactions, $parsed['transactions']);
+                    if (isset($parsed['balance'])) {
+                        $balance = $parsed['balance'];
+                        $balanceDate = $parsed['balance_date'];
+                    }
+                }
+            }
+        } catch (Exception $e) {
+            $this->logger->error('Failed to parse CAMT XML', ['error' => $e->getMessage()]);
+        }
+
+        $this->logger->info('Processed XML transactions', ['count' => count($transactions)]);
+
+        return [
+            'success' => true,
+            'transactions' => $transactions,
+            'balance' => $balance,
+            'balance_date' => $balanceDate,
+            'persisted_instance' => $this->finTs->persist()
+        ];
+    }
+
+    /**
+     * Parse CAMT XML content
+     */
+    private function parseCamtXml(string $xml): ?array
+    {
+        try {
+            $doc = new \SimpleXMLElement($xml);
+            $doc->registerXPathNamespace('camt', 'urn:iso:std:iso:20022:tech:xsd:camt.052.001.02');
+            $doc->registerXPathNamespace('camt2', 'urn:iso:std:iso:20022:tech:xsd:camt.053.001.02');
+            
+            $transactions = [];
+            $balance = null;
+            $balanceDate = null;
+
+            // Try to find balance
+            $balNodes = $doc->xpath('//camt:Bal|//camt2:Bal|//Bal');
+            foreach ($balNodes as $bal) {
+                $tp = (string) ($bal->Tp->CdOrPrtry->Cd ?? '');
+                if ($tp === 'CLBD' || $tp === 'ITBD') { // Closing/Interim Booked Balance
+                    $amt = (float) ($bal->Amt ?? 0);
+                    $cdtDbt = (string) ($bal->CdtDbtInd ?? 'CRDT');
+                    if ($cdtDbt === 'DBIT') {
+                        $amt = -$amt;
+                    }
+                    $balance = $amt;
+                    $balanceDate = (string) ($bal->Dt->Dt ?? date('Y-m-d'));
+                    break;
+                }
+            }
+
+            // Find entries/transactions
+            $entries = $doc->xpath('//camt:Ntry|//camt2:Ntry|//Ntry');
+            foreach ($entries as $entry) {
+                $amount = (float) ($entry->Amt ?? 0);
+                $cdtDbt = (string) ($entry->CdtDbtInd ?? 'CRDT');
+                if ($cdtDbt === 'DBIT') {
+                    $amount = -$amount;
+                }
+
+                $bookingDate = (string) ($entry->BookgDt->Dt ?? $entry->BookgDt->DtTm ?? null);
+                $valutaDate = (string) ($entry->ValDt->Dt ?? $entry->ValDt->DtTm ?? null);
+                
+                // Get transaction details
+                $txDtls = $entry->NtryDtls->TxDtls ?? null;
+                $name = '';
+                $description = '';
+                $iban = '';
+                $endToEndId = '';
+
+                if ($txDtls) {
+                    // Creditor/Debtor name
+                    $name = (string) ($txDtls->RltdPties->Cdtr->Nm ?? $txDtls->RltdPties->Dbtr->Nm ?? '');
+                    
+                    // IBAN
+                    $iban = (string) ($txDtls->RltdPties->CdtrAcct->Id->IBAN ?? $txDtls->RltdPties->DbtrAcct->Id->IBAN ?? '');
+                    
+                    // Description (Remittance Info)
+                    $rmtInf = $txDtls->RmtInf ?? null;
+                    if ($rmtInf) {
+                        $description = (string) ($rmtInf->Ustrd ?? '');
+                        if (empty($description) && isset($rmtInf->Strd->CdtrRefInf->Ref)) {
+                            $description = (string) $rmtInf->Strd->CdtrRefInf->Ref;
+                        }
+                    }
+                    
+                    // End to End ID
+                    $endToEndId = (string) ($txDtls->Refs->EndToEndId ?? '');
+                }
+
+                // Fallback for description from AddtlNtryInf
+                if (empty($description)) {
+                    $description = (string) ($entry->AddtlNtryInf ?? '');
+                }
+
+                $transactions[] = [
+                    'booking_date' => $bookingDate ? substr($bookingDate, 0, 10) : null,
+                    'valuta_date' => $valutaDate ? substr($valutaDate, 0, 10) : null,
+                    'amount' => $amount,
+                    'currency' => (string) ($entry->Amt['Ccy'] ?? 'EUR'),
+                    'name' => $name,
+                    'description' => $description,
+                    'booking_text' => (string) ($entry->AddtlNtryInf ?? ''),
+                    'iban' => $iban,
+                    'bic' => '',
+                    'end_to_end_id' => $endToEndId,
+                    'mandate_id' => '',
+                    'creditor_id' => '',
+                    'prima_nota' => '',
+                ];
+            }
+
+            return [
+                'transactions' => $transactions,
+                'balance' => $balance,
+                'balance_date' => $balanceDate
+            ];
+
+        } catch (Exception $e) {
+            $this->logger->error('CAMT XML parsing error', ['error' => $e->getMessage()]);
+            return null;
+        }
+    }
+
+    /**
+     * Fetch transactions using CAMT XML format
+     */
+    private function fetchTransactionsXML(SEPAAccount $account, \DateTime $from, \DateTime $to): array
+    {
+        try {
+            $getStatement = GetStatementOfAccountXML::create($account, $from, $to);
+            $this->finTs->execute($getStatement);
+
+            if ($getStatement->needsTan()) {
+                $this->logger->info('GetStatementOfAccountXML requires TAN');
+                return [
+                    'success' => false,
+                    'needs_tan' => true,
+                    'tan_request' => $this->extractTanRequest($getStatement),
+                    'persisted_action' => base64_encode(serialize($getStatement)),
+                    'persisted_instance' => $this->finTs->persist()
+                ];
+            }
+
+            return $this->processTransactionsXMLResult($getStatement);
+
+        } catch (Exception $e) {
+            $this->logger->error('CAMT XML fetch failed', ['error' => $e->getMessage()]);
+            return [
+                'success' => false,
+                'message' => 'Transaktionsabruf nicht unterstützt: ' . $e->getMessage()
+            ];
+        }
+    }
+
+    /**
+     * Process CAMT XML transactions result
+     */
+    private function processTransactionsXMLResult(GetStatementOfAccountXML $action): array
+    {
+        $transactions = [];
+        $balance = null;
+        $balanceDate = null;
+
+        $xmlStatements = $action->getStatements();
+        
+        foreach ($xmlStatements as $xmlContent) {
+            // Parse CAMT XML
+            try {
+                $xml = new \SimpleXMLElement($xmlContent);
+                $xml->registerXPathNamespace('camt', 'urn:iso:std:iso:20022:tech:xsd:camt.052.001.02');
+                
+                // Try to find transactions in various CAMT formats
+                $entries = $xml->xpath('//camt:Ntry') ?: $xml->xpath('//Ntry') ?: [];
+                
+                foreach ($entries as $entry) {
+                    $amount = (float) ($entry->Amt ?? 0);
+                    $creditDebit = (string) ($entry->CdtDbtInd ?? '');
+                    if ($creditDebit === 'DBIT') {
+                        $amount = -$amount;
+                    }
+
+                    $bookingDate = (string) ($entry->BookgDt->Dt ?? $entry->BookgDt->DtTm ?? null);
+                    $valutaDate = (string) ($entry->ValDt->Dt ?? $entry->ValDt->DtTm ?? null);
+                    
+                    $name = (string) ($entry->NtryDtls->TxDtls->RltdPties->Cdtr->Nm ?? 
+                                      $entry->NtryDtls->TxDtls->RltdPties->Dbtr->Nm ?? '');
+                    
+                    $iban = (string) ($entry->NtryDtls->TxDtls->RltdPties->CdtrAcct->Id->IBAN ?? 
+                                      $entry->NtryDtls->TxDtls->RltdPties->DbtrAcct->Id->IBAN ?? '');
+                    
+                    $description = (string) ($entry->NtryDtls->TxDtls->RmtInf->Ustrd ?? '');
+                    $endToEndId = (string) ($entry->NtryDtls->TxDtls->Refs->EndToEndId ?? '');
+                    $bookingText = (string) ($entry->AddtlNtryInf ?? '');
+
+                    $transactions[] = [
+                        'booking_date' => $bookingDate ?: null,
+                        'valuta_date' => $valutaDate ?: null,
+                        'amount' => $amount,
+                        'currency' => (string) ($entry->Amt['Ccy'] ?? 'EUR'),
+                        'name' => $name,
+                        'description' => $description,
+                        'booking_text' => $bookingText,
+                        'iban' => $iban,
+                        'bic' => '',
+                        'end_to_end_id' => $endToEndId,
+                        'mandate_id' => (string) ($entry->NtryDtls->TxDtls->Refs->MndtId ?? ''),
+                        'creditor_id' => '',
+                        'prima_nota' => '',
+                    ];
+                }
+
+                // Try to get balance
+                $balNode = $xml->xpath('//camt:Bal[camt:Tp/camt:CdOrPrtry/camt:Cd="CLBD"]') ?: 
+                           $xml->xpath('//Bal[Tp/CdOrPrtry/Cd="CLBD"]') ?: [];
+                if (!empty($balNode)) {
+                    $balance = (float) ($balNode[0]->Amt ?? 0);
+                    if ((string) ($balNode[0]->CdtDbtInd ?? '') === 'DBIT') {
+                        $balance = -$balance;
+                    }
+                    $balanceDate = (string) ($balNode[0]->Dt->Dt ?? date('Y-m-d'));
+                }
+
+            } catch (Exception $e) {
+                $this->logger->warning('Failed to parse CAMT XML', ['error' => $e->getMessage()]);
+            }
+        }
+
+        $this->logger->info('Processed CAMT transactions', ['count' => count($transactions)]);
+
+        return [
+            'success' => true,
+            'transactions' => $transactions,
+            'balance' => $balance,
+            'balance_date' => $balanceDate,
+            'persisted_instance' => $this->finTs->persist()
+        ];
+    }
+
+    /**
      * Process transactions result from GetStatementOfAccount
      */
     private function processTransactionsResult(GetStatementOfAccount $action): array
@@ -734,22 +1023,30 @@ class FinTSService
                 'to' => $to->format('Y-m-d')
             ]);
 
-            // Get statement of account (transactions)
-            $getStatement = GetStatementOfAccount::create($sepaAccount, $from, $to);
-            $this->finTs->execute($getStatement);
+            // Try MT940 format first (GetStatementOfAccount), then CAMT XML format
+            try {
+                $getStatement = GetStatementOfAccount::create($sepaAccount, $from, $to);
+                $this->finTs->execute($getStatement);
 
-            if ($getStatement->needsTan()) {
-                $this->logger->info('GetStatementOfAccount requires TAN');
-                return [
-                    'success' => false,
-                    'needs_tan' => true,
-                    'tan_request' => $this->extractTanRequest($getStatement),
-                    'persisted_action' => base64_encode(serialize($getStatement)),
-                    'persisted_instance' => $this->finTs->persist()
-                ];
+                if ($getStatement->needsTan()) {
+                    $this->logger->info('GetStatementOfAccount requires TAN');
+                    return [
+                        'success' => false,
+                        'needs_tan' => true,
+                        'tan_request' => $this->extractTanRequest($getStatement),
+                        'persisted_action' => base64_encode(serialize($getStatement)),
+                        'persisted_instance' => $this->finTs->persist()
+                    ];
+                }
+
+                return $this->processTransactionsResult($getStatement);
+
+            } catch (\Fhp\UnsupportedException $e) {
+                $this->logger->info('MT940 not supported, trying CAMT XML format', ['error' => $e->getMessage()]);
+                
+                // Try CAMT XML format
+                return $this->fetchTransactionsXML($sepaAccount, $from, $to);
             }
-
-            return $this->processTransactionsResult($getStatement);
 
         } catch (Exception $e) {
             $this->logger->error('Sync failed', ['error' => $e->getMessage()]);
