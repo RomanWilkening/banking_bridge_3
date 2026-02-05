@@ -1548,18 +1548,54 @@ class FinTSService
         $holdings = [];
         
         try {
+            // Debug: Log all available methods on the action object
+            $methods = get_class_methods($action);
+            $this->logger->info('GetDepotAufstellung available methods', ['methods' => $methods]);
+            
+            // Also check properties
+            $reflection = new \ReflectionClass($action);
+            $properties = [];
+            foreach ($reflection->getProperties() as $prop) {
+                $properties[] = $prop->getName();
+            }
+            $this->logger->info('GetDepotAufstellung properties', ['properties' => $properties]);
+            
             // GetDepotAufstellung returns a collection of holdings
             // The exact method depends on phpFinTS version
-            if (method_exists($action, 'getPositions')) {
+            $positions = null;
+            
+            if (method_exists($action, 'getDepot')) {
+                $depot = $action->getDepot();
+                $this->logger->info('Got depot object', ['type' => is_object($depot) ? get_class($depot) : gettype($depot)]);
+                if ($depot && method_exists($depot, 'getPositionen')) {
+                    $positions = $depot->getPositionen();
+                } elseif ($depot && method_exists($depot, 'getPositions')) {
+                    $positions = $depot->getPositions();
+                } elseif (is_array($depot)) {
+                    $positions = $depot;
+                }
+            } elseif (method_exists($action, 'getPositions')) {
                 $positions = $action->getPositions();
             } elseif (method_exists($action, 'getHoldings')) {
                 $positions = $action->getHoldings();
             } elseif (method_exists($action, 'getDepotPositionen')) {
                 $positions = $action->getDepotPositionen();
-            } else {
-                $this->logger->warning('Could not find depot positions method');
+            } elseif (method_exists($action, 'getStatement')) {
+                // Maybe it returns statement-like data
+                $positions = $action->getStatement();
+            }
+            
+            if ($positions === null) {
+                $this->logger->warning('Could not find depot positions method', [
+                    'tried' => ['getDepot', 'getPositions', 'getHoldings', 'getDepotPositionen', 'getStatement']
+                ]);
                 return [];
             }
+            
+            $this->logger->info('Got positions', [
+                'type' => is_array($positions) ? 'array' : (is_object($positions) ? get_class($positions) : gettype($positions)),
+                'count' => is_countable($positions) ? count($positions) : 'not countable'
+            ]);
             
             foreach ($positions as $position) {
                 $holding = [
