@@ -861,6 +861,7 @@ class FinTSService
             ]);
 
             // Try MT940 format first (GetStatementOfAccount), then CAMT XML format
+            $mt940Error = null;
             try {
                 $getStatement = GetStatementOfAccount::create($sepaAccount, $from, $to);
                 $this->finTs->execute($getStatement);
@@ -878,11 +879,29 @@ class FinTSService
 
                 return $this->processTransactionsResult($getStatement);
 
-            } catch (\Fhp\UnsupportedException $e) {
-                $this->logger->info('MT940 not supported, trying CAMT XML format', ['error' => $e->getMessage()]);
+            } catch (Exception $e) {
+                $mt940Error = $e->getMessage();
+                $this->logger->info('MT940 fetch failed, will try CAMT XML', ['error' => $mt940Error]);
+            }
+
+            // If MT940 failed, try CAMT XML format
+            if ($mt940Error !== null) {
+                $this->logger->info('Trying CAMT XML format as fallback');
                 
-                // Try CAMT XML format
-                return $this->fetchTransactionsXML($sepaAccount, $from, $to);
+                try {
+                    $result = $this->fetchTransactionsXML($sepaAccount, $from, $to);
+                    if ($result['success'] || isset($result['needs_tan'])) {
+                        return $result;
+                    }
+                } catch (Exception $camtEx) {
+                    $this->logger->warning('CAMT XML also failed', ['error' => $camtEx->getMessage()]);
+                }
+                
+                // Both formats failed - return the original error
+                return [
+                    'success' => false,
+                    'message' => 'Transaktionsabruf nicht unterstützt. MT940: ' . $mt940Error
+                ];
             }
 
         } catch (Exception $e) {
