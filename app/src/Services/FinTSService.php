@@ -614,7 +614,10 @@ class FinTSService
     private function fetchTransactionsXML(SEPAAccount $account, \DateTime $from, \DateTime $to): array
     {
         try {
+            $this->logger->info('Creating CAMT XML statement request');
             $getStatement = GetStatementOfAccountXML::create($account, $from, $to);
+            
+            $this->logger->info('Executing CAMT XML request');
             $this->finTs->execute($getStatement);
 
             if ($getStatement->needsTan()) {
@@ -628,13 +631,17 @@ class FinTSService
                 ];
             }
 
+            $this->logger->info('CAMT XML request successful, processing result');
             return $this->processTransactionsXMLResult($getStatement);
 
-        } catch (Exception $e) {
-            $this->logger->error('CAMT XML fetch failed', ['error' => $e->getMessage()]);
+        } catch (\Throwable $e) {
+            $this->logger->error('CAMT XML fetch failed', [
+                'error' => $e->getMessage(),
+                'class' => get_class($e)
+            ]);
             return [
                 'success' => false,
-                'message' => 'Transaktionsabruf nicht unterstützt: ' . $e->getMessage()
+                'message' => $e->getMessage()
             ];
         }
     }
@@ -881,73 +888,125 @@ class FinTSService
                 'to' => $to->format('Y-m-d')
             ]);
 
-            // Try MT940 format first (GetStatementOfAccount), then CAMT XML format
-            $mt940Error = null;
+            // Determine which format to try based on what the bank supports
+            // Check BPD for supported formats
+            $supportsMT940 = false;
+            $supportsCAMT = false;
+            
             try {
-                $getStatement = GetStatementOfAccount::create($sepaAccount, $from, $to);
-                $this->finTs->execute($getStatement);
-
-                if ($getStatement->needsTan()) {
-                    $this->logger->info('GetStatementOfAccount requires TAN');
-                    return [
-                        'success' => false,
-                        'needs_tan' => true,
-                        'tan_request' => $this->extractTanRequest($getStatement),
-                        'persisted_action' => base64_encode(serialize($getStatement)),
-                        'persisted_instance' => $this->finTs->persist()
-                    ];
+                $bpd = $this->finTs->getBpd();
+                if ($bpd) {
+                    $mt940Params = $bpd->parameters['HIKAZS'] ?? [];
+                    $camtParams = $bpd->parameters['HICAZS'] ?? [];
+                    
+                    // Check if any MT940 version is supported by phpFinTS (4,5,6,7)
+                    foreach (array_keys($mt940Params) as $version) {
+                        if (in_array((int)$version, [4, 5, 6, 7])) {
+                            $supportsMT940 = true;
+                            break;
+                        }
+                    }
+                    
+                    // Check if CAMT version 1 is supported
+                    foreach (array_keys($camtParams) as $version) {
+                        if ((int)$version === 1) {
+                            $supportsCAMT = true;
+                            break;
+                        }
+                    }
+                    
+                    $this->logger->info('Format support detected', [
+                        'mt940' => $supportsMT940,
+                        'camt' => $supportsCAMT,
+                        'mt940_versions' => array_keys($mt940Params),
+                        'camt_versions' => array_keys($camtParams)
+                    ]);
                 }
-
-                return $this->processTransactionsResult($getStatement);
-
             } catch (Exception $e) {
-                $mt940Error = $e->getMessage();
-                $this->logger->info('MT940 fetch failed, will try CAMT XML', ['error' => $mt940Error]);
+                $this->logger->warning('Could not check BPD for format support', ['error' => $e->getMessage()]);
+                // Assume both are possible, will try MT940 first
+                $supportsMT940 = true;
+                $supportsCAMT = true;
             }
 
-            // If MT940 failed, try CAMT XML format
-            if ($mt940Error !== null) {
-                $this->logger->info('Trying CAMT XML format as fallback');
-                
-                $camtError = null;
+            $errors = [];
+            
+            // Try MT940 first if supported
+            if ($supportsMT940) {
+                $this->logger->info('Trying MT940 format');
+                try {
+                    $getStatement = GetStatementOfAccount::create($sepaAccount, $from, $to);
+                    $this->finTs->execute($getStatement);
+
+                    if ($getStatement->needsTan()) {
+                        $this->logger->info('GetStatementOfAccount requires TAN');
+                        return [
+                            'success' => false,
+                            'needs_tan' => true,
+                            'tan_request' => $this->extractTanRequest($getStatement),
+                            'persisted_action' => base64_encode(serialize($getStatement)),
+                            'persisted_instance' => $this->finTs->persist()
+                        ];
+                    }
+
+                    $result = $this->processTransactionsResult($getStatement);
+                    if ($result['success']) {
+                        $this->logger->info('MT940 fetch successful');
+                        return $result;
+                    }
+                    $errors['MT940'] = $result['message'] ?? 'Unbekannter Fehler';
+                } catch (\Throwable $e) {
+                    $errors['MT940'] = $e->getMessage();
+                    $this->logger->info('MT940 fetch failed', ['error' => $e->getMessage()]);
+                }
+            }
+
+            // Try CAMT XML if supported (and MT940 didn't work or wasn't available)
+            if ($supportsCAMT) {
+                $this->logger->info('Trying CAMT XML format');
                 try {
                     $result = $this->fetchTransactionsXML($sepaAccount, $from, $to);
                     
-                    // Return if successful or needs TAN
-                    if ($result['success']) {
+                    if (isset($result['success']) && $result['success']) {
+                        $this->logger->info('CAMT XML fetch successful');
                         return $result;
                     }
                     if (isset($result['needs_tan']) && $result['needs_tan']) {
                         return $result;
                     }
                     
-                    // CAMT XML returned an error
-                    $camtError = $result['message'] ?? 'Unbekannter CAMT-Fehler';
-                    
-                } catch (Exception $camtEx) {
-                    $camtError = $camtEx->getMessage();
-                    $this->logger->warning('CAMT XML also failed', ['error' => $camtError]);
+                    $errors['CAMT'] = $result['message'] ?? 'Unbekannter Fehler';
+                } catch (\Throwable $e) {
+                    $errors['CAMT'] = $e->getMessage();
+                    $this->logger->warning('CAMT XML fetch failed', ['error' => $e->getMessage()]);
                 }
-                
-                // Both formats failed
-                $errorMsg = 'Transaktionsabruf fehlgeschlagen. ';
-                if (strpos($mt940Error, 'HIKAZS') !== false) {
-                    $errorMsg .= 'Diese Bank unterstützt möglicherweise keinen Kontoauszugsabruf per FinTS.';
-                } else {
-                    $errorMsg .= 'MT940: ' . $mt940Error;
-                }
-                if ($camtError) {
-                    $errorMsg .= ' CAMT: ' . $camtError;
-                }
-                
+            }
+
+            // Both formats failed or neither was available
+            if (empty($errors)) {
                 return [
                     'success' => false,
-                    'message' => $errorMsg
+                    'message' => 'Diese Bank unterstützt keinen Transaktionsabruf über FinTS (weder MT940 noch CAMT XML).'
                 ];
             }
 
-        } catch (Exception $e) {
-            $this->logger->error('Sync failed', ['error' => $e->getMessage()]);
+            $errorMsg = 'Transaktionsabruf fehlgeschlagen.';
+            foreach ($errors as $format => $error) {
+                // Simplify common error messages
+                if (strpos($error, 'HIKAZS') !== false || strpos($error, 'HICAZS') !== false) {
+                    $errorMsg .= " $format: Format nicht verfügbar.";
+                } else {
+                    $errorMsg .= " $format: $error";
+                }
+            }
+            
+            return [
+                'success' => false,
+                'message' => $errorMsg
+            ];
+
+        } catch (\Throwable $e) {
+            $this->logger->error('Sync failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
             return [
                 'success' => false,
                 'message' => 'Fehler: ' . $e->getMessage()
