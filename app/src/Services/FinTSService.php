@@ -888,19 +888,40 @@ class FinTSService
             if ($mt940Error !== null) {
                 $this->logger->info('Trying CAMT XML format as fallback');
                 
+                $camtError = null;
                 try {
                     $result = $this->fetchTransactionsXML($sepaAccount, $from, $to);
-                    if ($result['success'] || isset($result['needs_tan'])) {
+                    
+                    // Return if successful or needs TAN
+                    if ($result['success']) {
                         return $result;
                     }
+                    if (isset($result['needs_tan']) && $result['needs_tan']) {
+                        return $result;
+                    }
+                    
+                    // CAMT XML returned an error
+                    $camtError = $result['message'] ?? 'Unbekannter CAMT-Fehler';
+                    
                 } catch (Exception $camtEx) {
-                    $this->logger->warning('CAMT XML also failed', ['error' => $camtEx->getMessage()]);
+                    $camtError = $camtEx->getMessage();
+                    $this->logger->warning('CAMT XML also failed', ['error' => $camtError]);
                 }
                 
-                // Both formats failed - return the original error
+                // Both formats failed
+                $errorMsg = 'Transaktionsabruf fehlgeschlagen. ';
+                if (strpos($mt940Error, 'HIKAZS') !== false) {
+                    $errorMsg .= 'Diese Bank unterstützt möglicherweise keinen Kontoauszugsabruf per FinTS.';
+                } else {
+                    $errorMsg .= 'MT940: ' . $mt940Error;
+                }
+                if ($camtError) {
+                    $errorMsg .= ' CAMT: ' . $camtError;
+                }
+                
                 return [
                     'success' => false,
-                    'message' => 'Transaktionsabruf nicht unterstützt. MT940: ' . $mt940Error
+                    'message' => $errorMsg
                 ];
             }
 
