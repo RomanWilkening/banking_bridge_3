@@ -664,7 +664,7 @@ class FinTSService
         $this->logger->info('Got CAMT XML statements', ['count' => count($xmlStatements)]);
 
         if (empty($xmlStatements)) {
-            $this->logger->info('No XML statements returned');
+            $this->logger->info('No XML statements returned from bank');
             return [
                 'success' => true,
                 'transactions' => [],
@@ -674,15 +674,81 @@ class FinTSService
             ];
         }
         
-        foreach ($xmlStatements as $xmlContent) {
+        foreach ($xmlStatements as $index => $xmlContent) {
+            // Log first 500 chars of XML for debugging
+            $this->logger->debug('CAMT XML content sample', [
+                'index' => $index,
+                'length' => strlen($xmlContent),
+                'sample' => substr($xmlContent, 0, 500)
+            ]);
+            
             // Parse CAMT XML
             try {
                 $xml = new \SimpleXMLElement($xmlContent);
-                $xml->registerXPathNamespace('camt', 'urn:iso:std:iso:20022:tech:xsd:camt.052.001.02');
-                $xml->registerXPathNamespace('camt2', 'urn:iso:std:iso:20022:tech:xsd:camt.053.001.02');
                 
-                // Try to find transactions in various CAMT formats
-                $entries = $xml->xpath('//camt:Ntry') ?: $xml->xpath('//camt2:Ntry') ?: $xml->xpath('//Ntry') ?: [];
+                // Detect the namespace from the document
+                $namespaces = $xml->getNamespaces(true);
+                $this->logger->info('CAMT XML namespaces detected', ['namespaces' => $namespaces]);
+                
+                // Register all common CAMT namespaces
+                $camtNamespaces = [
+                    'camt052v02' => 'urn:iso:std:iso:20022:tech:xsd:camt.052.001.02',
+                    'camt052v08' => 'urn:iso:std:iso:20022:tech:xsd:camt.052.001.08',
+                    'camt053v02' => 'urn:iso:std:iso:20022:tech:xsd:camt.053.001.02',
+                    'camt053v08' => 'urn:iso:std:iso:20022:tech:xsd:camt.053.001.08',
+                    'camt054v02' => 'urn:iso:std:iso:20022:tech:xsd:camt.054.001.02',
+                    'camt054v08' => 'urn:iso:std:iso:20022:tech:xsd:camt.054.001.08',
+                ];
+                
+                foreach ($camtNamespaces as $prefix => $uri) {
+                    $xml->registerXPathNamespace($prefix, $uri);
+                }
+                
+                // Also register the default namespace if present
+                $defaultNs = $namespaces[''] ?? null;
+                if ($defaultNs) {
+                    $xml->registerXPathNamespace('ns', $defaultNs);
+                    $this->logger->info('Using default namespace', ['ns' => $defaultNs]);
+                }
+                
+                // Try multiple XPath expressions to find entries
+                $entries = [];
+                $xpathExpressions = [
+                    '//ns:Ntry',           // Default namespace
+                    '//Ntry',              // No namespace
+                    '//camt052v02:Ntry',
+                    '//camt052v08:Ntry',
+                    '//camt053v02:Ntry',
+                    '//camt053v08:Ntry',
+                    '//camt054v02:Ntry',
+                    '//camt054v08:Ntry',
+                ];
+                
+                foreach ($xpathExpressions as $xpath) {
+                    $result = $xml->xpath($xpath);
+                    if ($result && count($result) > 0) {
+                        $entries = $result;
+                        $this->logger->info('Found entries with XPath', [
+                            'xpath' => $xpath,
+                            'count' => count($entries)
+                        ]);
+                        break;
+                    }
+                }
+                
+                if (empty($entries)) {
+                    $this->logger->warning('No Ntry elements found in CAMT XML', [
+                        'tried_xpaths' => $xpathExpressions
+                    ]);
+                    
+                    // Try to find what elements ARE present
+                    $children = $xml->children();
+                    $childNames = [];
+                    foreach ($children as $child) {
+                        $childNames[] = $child->getName();
+                    }
+                    $this->logger->debug('Root element children', ['children' => $childNames]);
+                }
                 
                 foreach ($entries as $entry) {
                     $amount = (float) ($entry->Amt ?? 0);
@@ -694,20 +760,50 @@ class FinTSService
                     $bookingDate = (string) ($entry->BookgDt->Dt ?? $entry->BookgDt->DtTm ?? null);
                     $valutaDate = (string) ($entry->ValDt->Dt ?? $entry->ValDt->DtTm ?? null);
                     
-                    $name = (string) ($entry->NtryDtls->TxDtls->RltdPties->Cdtr->Nm ?? 
-                                      $entry->NtryDtls->TxDtls->RltdPties->Dbtr->Nm ?? '');
+                    // Try multiple paths for party names
+                    $name = '';
+                    $namePaths = [
+                        $entry->NtryDtls->TxDtls->RltdPties->Cdtr->Nm ?? null,
+                        $entry->NtryDtls->TxDtls->RltdPties->Dbtr->Nm ?? null,
+                        $entry->NtryDtls->TxDtls->RltdPties->CdtrAcct->Nm ?? null,
+                        $entry->NtryDtls->TxDtls->RltdPties->DbtrAcct->Nm ?? null,
+                    ];
+                    foreach ($namePaths as $path) {
+                        if ($path !== null && (string)$path !== '') {
+                            $name = (string)$path;
+                            break;
+                        }
+                    }
                     
-                    $iban = (string) ($entry->NtryDtls->TxDtls->RltdPties->CdtrAcct->Id->IBAN ?? 
-                                      $entry->NtryDtls->TxDtls->RltdPties->DbtrAcct->Id->IBAN ?? '');
+                    // Try multiple paths for IBAN
+                    $iban = '';
+                    $ibanPaths = [
+                        $entry->NtryDtls->TxDtls->RltdPties->CdtrAcct->Id->IBAN ?? null,
+                        $entry->NtryDtls->TxDtls->RltdPties->DbtrAcct->Id->IBAN ?? null,
+                    ];
+                    foreach ($ibanPaths as $path) {
+                        if ($path !== null && (string)$path !== '') {
+                            $iban = (string)$path;
+                            break;
+                        }
+                    }
                     
-                    $description = (string) ($entry->NtryDtls->TxDtls->RmtInf->Ustrd ?? '');
+                    // Try multiple paths for description
+                    $description = '';
+                    $descPaths = [
+                        $entry->NtryDtls->TxDtls->RmtInf->Ustrd ?? null,
+                        $entry->AddtlNtryInf ?? null,
+                        $entry->NtryDtls->TxDtls->AddtlTxInf ?? null,
+                    ];
+                    foreach ($descPaths as $path) {
+                        if ($path !== null && (string)$path !== '') {
+                            $description = (string)$path;
+                            break;
+                        }
+                    }
+                    
                     $endToEndId = (string) ($entry->NtryDtls->TxDtls->Refs->EndToEndId ?? '');
                     $bookingText = (string) ($entry->AddtlNtryInf ?? '');
-
-                    // Fallback for description
-                    if (empty($description)) {
-                        $description = $bookingText;
-                    }
 
                     $transactions[] = [
                         'booking_date' => $bookingDate ? substr($bookingDate, 0, 10) : null,
@@ -726,22 +822,32 @@ class FinTSService
                     ];
                 }
 
-                // Try to get balance - check for Closing Booked Balance (CLBD) or Interim Booked Balance (ITBD)
-                $balNode = $xml->xpath('//camt:Bal[camt:Tp/camt:CdOrPrtry/camt:Cd="CLBD"]') ?: 
-                           $xml->xpath('//camt2:Bal[camt2:Tp/camt2:CdOrPrtry/camt2:Cd="CLBD"]') ?:
-                           $xml->xpath('//Bal[Tp/CdOrPrtry/Cd="CLBD"]') ?: 
-                           $xml->xpath('//camt:Bal[camt:Tp/camt:CdOrPrtry/camt:Cd="ITBD"]') ?:
-                           $xml->xpath('//Bal[Tp/CdOrPrtry/Cd="ITBD"]') ?: [];
-                if (!empty($balNode)) {
-                    $balance = (float) ($balNode[0]->Amt ?? 0);
-                    if ((string) ($balNode[0]->CdtDbtInd ?? '') === 'DBIT') {
-                        $balance = -$balance;
+                // Try to get balance
+                $balXpaths = [
+                    '//ns:Bal[ns:Tp/ns:CdOrPrtry/ns:Cd="CLBD"]',
+                    '//Bal[Tp/CdOrPrtry/Cd="CLBD"]',
+                    '//ns:Bal[ns:Tp/ns:CdOrPrtry/ns:Cd="ITBD"]',
+                    '//Bal[Tp/CdOrPrtry/Cd="ITBD"]',
+                ];
+                
+                foreach ($balXpaths as $xpath) {
+                    $balNode = $xml->xpath($xpath);
+                    if ($balNode && count($balNode) > 0) {
+                        $balance = (float) ($balNode[0]->Amt ?? 0);
+                        if ((string) ($balNode[0]->CdtDbtInd ?? '') === 'DBIT') {
+                            $balance = -$balance;
+                        }
+                        $balanceDate = (string) ($balNode[0]->Dt->Dt ?? date('Y-m-d'));
+                        $this->logger->info('Found balance', ['balance' => $balance, 'xpath' => $xpath]);
+                        break;
                     }
-                    $balanceDate = (string) ($balNode[0]->Dt->Dt ?? date('Y-m-d'));
                 }
 
-            } catch (Exception $e) {
-                $this->logger->warning('Failed to parse CAMT XML', ['error' => $e->getMessage()]);
+            } catch (\Throwable $e) {
+                $this->logger->error('Failed to parse CAMT XML', [
+                    'error' => $e->getMessage(),
+                    'xml_sample' => substr($xmlContent, 0, 200)
+                ]);
             }
         }
 
@@ -757,7 +863,7 @@ class FinTSService
     }
 
     /**
-     * Process transactions result from GetStatementOfAccount
+     * Process transactions result from GetStatementOfAccount (MT940)
      */
     private function processTransactionsResult(GetStatementOfAccount $action): array
     {
@@ -766,15 +872,35 @@ class FinTSService
         $balance = null;
         $balanceDate = null;
 
-        foreach ($soa->getStatements() as $statement) {
+        $statements = $soa->getStatements();
+        $this->logger->info('MT940: Got statements', ['count' => count($statements)]);
+        
+        // Also log raw MT940 for debugging
+        $rawMT940 = $action->getRawMT940();
+        $this->logger->debug('MT940 raw data', [
+            'length' => strlen($rawMT940),
+            'sample' => substr($rawMT940, 0, 500)
+        ]);
+
+        foreach ($statements as $stmtIndex => $statement) {
             // Get the end balance from the most recent statement
             $statementBalance = $statement->getEndBalance();
+            $stmtDate = $statement->getDate();
+            
+            $this->logger->info('MT940: Processing statement', [
+                'index' => $stmtIndex,
+                'date' => $stmtDate?->format('Y-m-d'),
+                'start_balance' => $statement->getStartBalance(),
+                'end_balance' => $statementBalance,
+                'transaction_count' => count($statement->getTransactions())
+            ]);
+            
             if ($statementBalance !== null) {
                 $balance = $statementBalance;
-                $balanceDate = $statement->getDate()?->format('Y-m-d H:i:s');
+                $balanceDate = $stmtDate?->format('Y-m-d H:i:s');
             }
 
-            foreach ($statement->getTransactions() as $tx) {
+            foreach ($statement->getTransactions() as $txIndex => $tx) {
                 $amount = $tx->getAmount();
                 // Transaction::CD_DEBIT = 'debit'
                 if ($tx->getCreditDebit() === 'debit') {
@@ -782,6 +908,17 @@ class FinTSService
                 }
 
                 $structuredDesc = $tx->getStructuredDescription();
+                
+                // Log first few transactions for debugging
+                if ($txIndex < 3) {
+                    $this->logger->debug('MT940: Transaction sample', [
+                        'index' => $txIndex,
+                        'amount' => $amount,
+                        'name' => $tx->getName(),
+                        'booking_date' => $tx->getBookingDate()?->format('Y-m-d'),
+                        'description' => substr($tx->getMainDescription(), 0, 100)
+                    ]);
+                }
                 
                 $transactions[] = [
                     'booking_date' => $tx->getBookingDate()?->format('Y-m-d'),
@@ -801,7 +938,7 @@ class FinTSService
             }
         }
 
-        $this->logger->info('Processed transactions', ['count' => count($transactions)]);
+        $this->logger->info('MT940: Processed transactions', ['total_count' => count($transactions)]);
 
         return [
             'success' => true,
