@@ -1,0 +1,354 @@
+{% extends "layout.twig" %}
+
+{% block content %}
+<div x-data="accountDetails({{ account.id }}, {{ account.bank_id }})" class="space-y-6">
+    <!-- Account Header -->
+    <div class="bg-white shadow rounded-lg overflow-hidden">
+        <div class="px-4 py-5 sm:px-6 flex justify-between items-center border-b border-gray-200">
+            <div class="flex items-center">
+                <span class="inline-flex items-center justify-center h-14 w-14 rounded-full bg-primary-100">
+                    <span class="text-2xl">💳</span>
+                </span>
+                <div class="ml-4">
+                    <h3 class="text-lg font-medium text-gray-900">{{ account.account_name ?? 'Konto' }}</h3>
+                    <p class="text-sm text-gray-500">{{ account.iban }}</p>
+                    <p class="text-xs text-gray-400">{{ bank.name }}</p>
+                </div>
+            </div>
+            <div class="text-right">
+                {% if account.balance is not null %}
+                <p class="text-2xl font-bold {% if account.balance >= 0 %}text-green-600{% else %}text-red-600{% endif %}">
+                    {{ account.balance|number_format(2, ',', '.') }} {{ account.currency }}
+                </p>
+                {% if account.balance_date %}
+                <p class="text-xs text-gray-400">Stand: {{ account.balance_date|date('d.m.Y H:i') }}</p>
+                {% endif %}
+                {% else %}
+                <p class="text-lg text-gray-400">Kein Saldo</p>
+                {% endif %}
+            </div>
+        </div>
+        
+        <div class="px-4 py-3 bg-gray-50 flex justify-between items-center">
+            <div>
+                <span class="text-sm text-gray-500">{{ pagination.total_items }} Transaktionen gespeichert</span>
+            </div>
+            <button @click="syncTransactions" :disabled="syncing"
+                    class="inline-flex items-center rounded-md bg-primary-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-primary-500 disabled:opacity-50">
+                <span x-show="syncing" class="loading-spinner mr-2"></span>
+                <span x-text="syncing ? 'Synchronisiere...' : 'Transaktionen abrufen'"></span>
+            </button>
+        </div>
+    </div>
+
+    <!-- TAN Modal -->
+    <div x-show="showTanModal" x-cloak 
+         class="fixed inset-0 z-50 overflow-y-auto" 
+         aria-labelledby="modal-title" role="dialog" aria-modal="true">
+        <div class="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
+            <div class="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity" @click="closeModal"></div>
+            <span class="hidden sm:inline-block sm:align-middle sm:h-screen">&#8203;</span>
+            <div class="inline-block align-bottom bg-white rounded-lg px-4 pt-5 pb-4 text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full sm:p-6">
+                <div>
+                    <div class="mx-auto flex items-center justify-center h-12 w-12 rounded-full" :class="isDecoupled ? 'bg-blue-100' : 'bg-yellow-100'">
+                        <span class="text-2xl" x-text="isDecoupled ? '📱' : '🔐'"></span>
+                    </div>
+                    <div class="mt-3 text-center sm:mt-5">
+                        <h3 class="text-lg leading-6 font-medium text-gray-900" x-text="isDecoupled ? 'App-Bestätigung erforderlich' : 'TAN-Eingabe erforderlich'"></h3>
+                        <div class="mt-2">
+                            <p class="text-sm text-gray-500" x-text="tanRequest?.challenge"></p>
+                        </div>
+                        
+                        <div x-show="isDecoupled" class="mt-6">
+                            <div class="flex justify-center">
+                                <div class="loading-spinner" style="width: 40px; height: 40px; border-width: 4px;"></div>
+                            </div>
+                            <p class="mt-4 text-sm text-gray-600">Warte auf Bestätigung in der Banking-App...</p>
+                        </div>
+                        
+                        <div x-show="!isDecoupled" class="mt-4">
+                            <input type="text" x-model="tanInput" @keyup.enter="submitTan"
+                                   class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm border px-3 py-2 text-center text-lg tracking-widest"
+                                   placeholder="TAN eingeben" autofocus>
+                        </div>
+                    </div>
+                </div>
+                <div class="mt-5 sm:mt-6">
+                    <button x-show="!isDecoupled" type="button" @click="submitTan" :disabled="submittingTan"
+                            class="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-primary-600 text-base font-medium text-white hover:bg-primary-700 sm:text-sm disabled:opacity-50 mb-3">
+                        <span x-show="submittingTan" class="loading-spinner mr-2"></span>
+                        Bestätigen
+                    </button>
+                    <button type="button" @click="closeModal"
+                            class="w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 sm:text-sm">
+                        Abbrechen
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Messages -->
+    <div x-show="message" x-cloak>
+        <div x-show="message?.type === 'success'" class="rounded-md bg-green-50 p-4">
+            <div class="flex">
+                <div class="flex-shrink-0">
+                    <svg class="h-5 w-5 text-green-400" viewBox="0 0 20 20" fill="currentColor">
+                        <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.857-9.809a.75.75 0 00-1.214-.882l-3.483 4.79-1.88-1.88a.75.75 0 10-1.06 1.061l2.5 2.5a.75.75 0 001.137-.089l4-5.5z" clip-rule="evenodd" />
+                    </svg>
+                </div>
+                <div class="ml-3">
+                    <p class="text-sm font-medium text-green-800" x-text="message?.text"></p>
+                </div>
+            </div>
+        </div>
+        <div x-show="message?.type === 'error'" class="rounded-md bg-red-50 p-4">
+            <div class="flex">
+                <div class="flex-shrink-0">
+                    <svg class="h-5 w-5 text-red-400" viewBox="0 0 20 20" fill="currentColor">
+                        <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.28 7.22a.75.75 0 00-1.06 1.06L8.94 10l-1.72 1.72a.75.75 0 101.06 1.06L10 11.06l1.72 1.72a.75.75 0 101.06-1.06L11.06 10l1.72-1.72a.75.75 0 00-1.06-1.06L10 8.94 8.28 7.22z" clip-rule="evenodd" />
+                    </svg>
+                </div>
+                <div class="ml-3">
+                    <p class="text-sm font-medium text-red-800" x-text="message?.text"></p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Transactions List -->
+    <div class="bg-white shadow rounded-lg">
+        <div class="px-4 py-5 sm:px-6 border-b border-gray-200">
+            <h3 class="text-lg font-medium leading-6 text-gray-900">Transaktionen</h3>
+        </div>
+        
+        {% if transactions|length > 0 %}
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-gray-200">
+                <thead class="bg-gray-50">
+                    <tr>
+                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Datum</th>
+                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Empfänger/Auftraggeber</th>
+                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Verwendungszweck</th>
+                        <th scope="col" class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Betrag</th>
+                    </tr>
+                </thead>
+                <tbody class="bg-white divide-y divide-gray-200">
+                    {% for tx in transactions %}
+                    <tr class="hover:bg-gray-50">
+                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                            {{ tx.booking_date|date('d.m.Y') }}
+                        </td>
+                        <td class="px-6 py-4 text-sm text-gray-900">
+                            <div class="font-medium">{{ tx.name ?? '-' }}</div>
+                            {% if tx.iban %}
+                            <div class="text-xs text-gray-400">{{ tx.iban }}</div>
+                            {% endif %}
+                        </td>
+                        <td class="px-6 py-4 text-sm text-gray-500">
+                            <div class="max-w-xs truncate" title="{{ tx.description }}">{{ tx.description ?? tx.booking_text ?? '-' }}</div>
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm text-right font-medium {% if tx.amount >= 0 %}text-green-600{% else %}text-red-600{% endif %}">
+                            {{ tx.amount|number_format(2, ',', '.') }} {{ tx.currency }}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Pagination -->
+        {% if pagination.total_pages > 1 %}
+        <div class="px-4 py-3 border-t border-gray-200 flex items-center justify-between">
+            <div class="flex-1 flex justify-between sm:hidden">
+                {% if pagination.has_prev %}
+                <a href="?page={{ pagination.current_page - 1 }}" class="relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50">
+                    Zurück
+                </a>
+                {% endif %}
+                {% if pagination.has_next %}
+                <a href="?page={{ pagination.current_page + 1 }}" class="ml-3 relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50">
+                    Weiter
+                </a>
+                {% endif %}
+            </div>
+            <div class="hidden sm:flex-1 sm:flex sm:items-center sm:justify-between">
+                <div>
+                    <p class="text-sm text-gray-700">
+                        Seite <span class="font-medium">{{ pagination.current_page }}</span> von <span class="font-medium">{{ pagination.total_pages }}</span>
+                    </p>
+                </div>
+                <div>
+                    <nav class="relative z-0 inline-flex rounded-md shadow-sm -space-x-px" aria-label="Pagination">
+                        {% if pagination.has_prev %}
+                        <a href="?page={{ pagination.current_page - 1 }}" class="relative inline-flex items-center px-2 py-2 rounded-l-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50">
+                            <svg class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                                <path fill-rule="evenodd" d="M12.707 5.293a1 1 0 010 1.414L9.414 10l3.293 3.293a1 1 0 01-1.414 1.414l-4-4a1 1 0 010-1.414l4-4a1 1 0 011.414 0z" clip-rule="evenodd" />
+                            </svg>
+                        </a>
+                        {% endif %}
+                        {% if pagination.has_next %}
+                        <a href="?page={{ pagination.current_page + 1 }}" class="relative inline-flex items-center px-2 py-2 rounded-r-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50">
+                            <svg class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                                <path fill-rule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clip-rule="evenodd" />
+                            </svg>
+                        </a>
+                        {% endif %}
+                    </nav>
+                </div>
+            </div>
+        </div>
+        {% endif %}
+
+        {% else %}
+        <div class="px-4 py-12 text-center">
+            <span class="text-4xl">📋</span>
+            <p class="mt-2 text-sm text-gray-500">Noch keine Transaktionen</p>
+            <p class="text-sm text-gray-400">Klicken Sie auf "Transaktionen abrufen" um die Umsätze von der Bank zu laden</p>
+        </div>
+        {% endif %}
+    </div>
+
+    <!-- Back Link -->
+    <div>
+        <a href="/banks/{{ bank.id }}" class="text-sm text-primary-600 hover:text-primary-500">← Zurück zur Bank</a>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function accountDetails(accountId, bankId) {
+    return {
+        accountId: accountId,
+        bankId: bankId,
+        syncing: false,
+        showTanModal: false,
+        tanRequest: null,
+        tanInput: '',
+        submittingTan: false,
+        isDecoupled: false,
+        pollingInterval: null,
+        message: null,
+
+        async syncTransactions() {
+            this.syncing = true;
+            this.message = null;
+
+            try {
+                const response = await fetch(`/api/accounts/${this.accountId}/sync`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        from: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+                        to: new Date().toISOString().split('T')[0]
+                    })
+                });
+                const data = await response.json();
+
+                if (data.needs_tan) {
+                    this.tanRequest = data.tan_request;
+                    this.isDecoupled = data.tan_request?.is_decoupled || false;
+                    this.showTanModal = true;
+                    
+                    if (this.isDecoupled) {
+                        this.startDecoupledPolling();
+                    }
+                } else if (data.success) {
+                    this.message = { type: 'success', text: `${data.count} Transaktionen synchronisiert!` };
+                    setTimeout(() => location.reload(), 1500);
+                } else {
+                    this.message = { type: 'error', text: data.message || 'Fehler beim Synchronisieren' };
+                }
+            } catch (error) {
+                this.message = { type: 'error', text: 'Netzwerkfehler: ' + error.message };
+            }
+
+            this.syncing = false;
+        },
+
+        startDecoupledPolling() {
+            this.pollingInterval = setInterval(() => this.checkDecoupledStatus(), 3000);
+        },
+
+        stopDecoupledPolling() {
+            if (this.pollingInterval) {
+                clearInterval(this.pollingInterval);
+                this.pollingInterval = null;
+            }
+        },
+
+        async checkDecoupledStatus() {
+            try {
+                const response = await fetch(`/api/banks/${this.bankId}/decoupled`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                const data = await response.json();
+
+                if (data.status === 'pending') {
+                    // Continue polling
+                } else if (data.success) {
+                    this.stopDecoupledPolling();
+                    this.showTanModal = false;
+                    this.message = { type: 'success', text: 'Transaktionen synchronisiert!' };
+                    setTimeout(() => location.reload(), 1500);
+                } else if (!data.needs_tan) {
+                    this.stopDecoupledPolling();
+                    this.showTanModal = false;
+                    this.message = { type: 'error', text: data.message || 'Fehler' };
+                }
+            } catch (error) {
+                console.error('Polling error:', error);
+            }
+        },
+
+        async submitTan() {
+            if (!this.tanInput.trim()) return;
+            
+            this.submittingTan = true;
+
+            try {
+                const response = await fetch(`/api/banks/${this.bankId}/tan`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ tan: this.tanInput })
+                });
+                const data = await response.json();
+
+                if (data.needs_tan) {
+                    this.tanRequest = data.tan_request;
+                    this.isDecoupled = data.tan_request?.is_decoupled || false;
+                    this.tanInput = '';
+                    if (this.isDecoupled) {
+                        this.startDecoupledPolling();
+                    }
+                } else if (data.success) {
+                    this.showTanModal = false;
+                    // After TAN, try syncing again
+                    this.syncTransactions();
+                } else {
+                    this.message = { type: 'error', text: data.message || 'TAN-Fehler' };
+                    this.showTanModal = false;
+                }
+            } catch (error) {
+                this.message = { type: 'error', text: 'Netzwerkfehler: ' + error.message };
+                this.showTanModal = false;
+            }
+
+            this.submittingTan = false;
+            this.tanInput = '';
+        },
+
+        closeModal() {
+            this.stopDecoupledPolling();
+            this.showTanModal = false;
+            this.tanInput = '';
+            this.isDecoupled = false;
+        }
+    }
+}
+</script>
+{% endblock %}
