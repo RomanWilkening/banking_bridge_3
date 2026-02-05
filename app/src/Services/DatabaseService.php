@@ -84,6 +84,35 @@ class DatabaseService
                 FOREIGN KEY (bank_id) REFERENCES banks(id) ON DELETE CASCADE
             )
         ");
+
+        $this->pdo->exec("
+            CREATE TABLE IF NOT EXISTS transactions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                account_id INTEGER NOT NULL,
+                transaction_id TEXT,
+                booking_date DATE,
+                valuta_date DATE,
+                amount REAL NOT NULL,
+                currency TEXT DEFAULT 'EUR',
+                name TEXT,
+                description TEXT,
+                iban TEXT,
+                bic TEXT,
+                mandate_id TEXT,
+                creditor_id TEXT,
+                end_to_end_id TEXT,
+                booking_text TEXT,
+                prima_nota TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE,
+                UNIQUE(account_id, transaction_id)
+            )
+        ");
+
+        $this->pdo->exec("
+            CREATE INDEX IF NOT EXISTS idx_transactions_account_date 
+            ON transactions(account_id, booking_date DESC)
+        ");
     }
 
     public function getPdo(): PDO
@@ -248,5 +277,104 @@ class DatabaseService
             VALUES (?, ?, CURRENT_TIMESTAMP)
         ");
         return $stmt->execute([$key, $value]);
+    }
+
+    // Transaction Methods
+    public function getAccountById(int $id): ?array
+    {
+        $stmt = $this->pdo->prepare("SELECT * FROM accounts WHERE id = ?");
+        $stmt->execute([$id]);
+        $result = $stmt->fetch();
+        return $result ?: null;
+    }
+
+    public function saveTransaction(int $accountId, array $data): int
+    {
+        // Generate a unique transaction ID if not provided
+        $transactionId = $data['transaction_id'] ?? md5(
+            $accountId . 
+            ($data['booking_date'] ?? '') . 
+            ($data['amount'] ?? '') . 
+            ($data['name'] ?? '') . 
+            ($data['description'] ?? '')
+        );
+
+        $stmt = $this->pdo->prepare("
+            INSERT OR REPLACE INTO transactions (
+                account_id, transaction_id, booking_date, valuta_date, amount, currency,
+                name, description, iban, bic, mandate_id, creditor_id, 
+                end_to_end_id, booking_text, prima_nota
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ");
+        
+        $stmt->execute([
+            $accountId,
+            $transactionId,
+            $data['booking_date'] ?? null,
+            $data['valuta_date'] ?? null,
+            $data['amount'] ?? 0,
+            $data['currency'] ?? 'EUR',
+            $data['name'] ?? null,
+            $data['description'] ?? null,
+            $data['iban'] ?? null,
+            $data['bic'] ?? null,
+            $data['mandate_id'] ?? null,
+            $data['creditor_id'] ?? null,
+            $data['end_to_end_id'] ?? null,
+            $data['booking_text'] ?? null,
+            $data['prima_nota'] ?? null
+        ]);
+        
+        return (int) $this->pdo->lastInsertId();
+    }
+
+    public function saveTransactions(int $accountId, array $transactions): int
+    {
+        $count = 0;
+        foreach ($transactions as $transaction) {
+            $this->saveTransaction($accountId, $transaction);
+            $count++;
+        }
+        return $count;
+    }
+
+    public function getTransactionsByAccountId(int $accountId, int $limit = 30, int $offset = 0): array
+    {
+        $stmt = $this->pdo->prepare("
+            SELECT * FROM transactions 
+            WHERE account_id = ? 
+            ORDER BY booking_date DESC, id DESC
+            LIMIT ? OFFSET ?
+        ");
+        $stmt->execute([$accountId, $limit, $offset]);
+        return $stmt->fetchAll();
+    }
+
+    public function getTransactionCount(int $accountId): int
+    {
+        $stmt = $this->pdo->prepare("SELECT COUNT(*) as count FROM transactions WHERE account_id = ?");
+        $stmt->execute([$accountId]);
+        $result = $stmt->fetch();
+        return (int) ($result['count'] ?? 0);
+    }
+
+    public function getLatestTransactionDate(int $accountId): ?string
+    {
+        $stmt = $this->pdo->prepare("
+            SELECT MAX(booking_date) as latest FROM transactions WHERE account_id = ?
+        ");
+        $stmt->execute([$accountId]);
+        $result = $stmt->fetch();
+        return $result['latest'] ?? null;
+    }
+
+    public function updateAccountBalance(int $accountId, float $balance, ?string $balanceDate = null): bool
+    {
+        $stmt = $this->pdo->prepare("
+            UPDATE accounts 
+            SET balance = ?, balance_date = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+        ");
+        return $stmt->execute([$balance, $balanceDate ?? date('Y-m-d H:i:s'), $accountId]);
     }
 }

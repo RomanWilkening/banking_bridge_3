@@ -9,6 +9,8 @@ use Fhp\Options\Credentials;
 use Fhp\Model\SEPAAccount;
 use Fhp\Action\GetSEPAAccounts;
 use Fhp\Action\GetBalance;
+use Fhp\Action\GetStatementOfAccount;
+use Fhp\Model\StatementOfAccount\Transaction;
 use Fhp\BaseAction;
 use Fhp\CurlException;
 use Fhp\Protocol\ServerException;
@@ -536,6 +538,137 @@ class FinTSService
                 'message' => 'Fehler bei Statusabfrage: ' . $e->getMessage()
             ];
         }
+    }
+
+    /**
+     * Get transactions for an account
+     */
+    public function getTransactions(array $bankConfig, SEPAAccount $account, ?\DateTime $from = null, ?\DateTime $to = null, ?string $persistedInstance = null): array
+    {
+        try {
+            $options = $this->createOptions($bankConfig);
+            $credentials = $this->createCredentials($bankConfig);
+            
+            if ($persistedInstance) {
+                $this->finTs = FinTs::new($options, $credentials, $persistedInstance);
+            } else {
+                $this->finTs = FinTs::new($options, $credentials);
+                $this->selectTanMode();
+            }
+
+            // Login first
+            $login = $this->finTs->login();
+            if ($login->needsTan()) {
+                return [
+                    'success' => false,
+                    'needs_tan' => true,
+                    'tan_request' => $this->extractTanRequest($login),
+                    'persisted_action' => base64_encode(serialize($login)),
+                    'persisted_instance' => $this->finTs->persist()
+                ];
+            }
+
+            // Default to last 30 days if no date range specified
+            if ($from === null) {
+                $from = new \DateTime('-30 days');
+            }
+            if ($to === null) {
+                $to = new \DateTime();
+            }
+
+            $this->logger->info('Fetching transactions', [
+                'account' => $account->getIban(),
+                'from' => $from->format('Y-m-d'),
+                'to' => $to->format('Y-m-d')
+            ]);
+
+            $getStatement = GetStatementOfAccount::create($account, $from, $to);
+            $this->finTs->execute($getStatement);
+
+            if ($getStatement->needsTan()) {
+                return [
+                    'success' => false,
+                    'needs_tan' => true,
+                    'tan_request' => $this->extractTanRequest($getStatement),
+                    'persisted_action' => base64_encode(serialize($getStatement)),
+                    'persisted_instance' => $this->finTs->persist()
+                ];
+            }
+
+            return $this->processTransactionsResult($getStatement);
+
+        } catch (Exception $e) {
+            $this->logger->error('Failed to get transactions', ['error' => $e->getMessage()]);
+            return [
+                'success' => false,
+                'message' => 'Fehler beim Abrufen der Transaktionen: ' . $e->getMessage()
+            ];
+        }
+    }
+
+    /**
+     * Process transactions result from GetStatementOfAccount
+     */
+    private function processTransactionsResult(GetStatementOfAccount $action): array
+    {
+        $soa = $action->getStatement();
+        $transactions = [];
+        $balance = null;
+        $balanceDate = null;
+
+        foreach ($soa->getStatements() as $statement) {
+            // Get the end balance from the statement
+            $balance = $statement->getStartBalance();
+            $balanceDate = $statement->getDate()?->format('Y-m-d H:i:s');
+
+            foreach ($statement->getTransactions() as $tx) {
+                $amount = $tx->getAmount();
+                if ($tx->getCreditDebit() === Transaction::CD_DEBIT) {
+                    $amount = -$amount;
+                }
+
+                $structuredDesc = $tx->getStructuredDescription();
+                
+                $transactions[] = [
+                    'booking_date' => $tx->getBookingDate()?->format('Y-m-d'),
+                    'valuta_date' => $tx->getValutaDate()?->format('Y-m-d'),
+                    'amount' => $amount,
+                    'currency' => 'EUR',
+                    'name' => $tx->getName(),
+                    'description' => $tx->getMainDescription(),
+                    'booking_text' => $tx->getBookingText(),
+                    'iban' => $structuredDesc['IBAN'] ?? null,
+                    'bic' => $structuredDesc['BIC'] ?? null,
+                    'end_to_end_id' => $tx->getEndToEndID(),
+                    'mandate_id' => $structuredDesc['MREF'] ?? null,
+                    'creditor_id' => $structuredDesc['CRED'] ?? null,
+                    'prima_nota' => (string) $tx->getPN(),
+                ];
+            }
+        }
+
+        $this->logger->info('Processed transactions', ['count' => count($transactions)]);
+
+        return [
+            'success' => true,
+            'transactions' => $transactions,
+            'balance' => $balance,
+            'balance_date' => $balanceDate,
+            'persisted_instance' => $this->finTs->persist()
+        ];
+    }
+
+    /**
+     * Find SEPAAccount by IBAN in a list
+     */
+    public function findAccountByIban(array $accounts, string $iban): ?SEPAAccount
+    {
+        foreach ($accounts as $account) {
+            if ($account->getIban() === $iban) {
+                return $account;
+            }
+        }
+        return null;
     }
 
     /**

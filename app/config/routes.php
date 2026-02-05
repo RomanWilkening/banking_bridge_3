@@ -16,6 +16,9 @@ return function (App $app) {
     $app->post('/banks/{id}/delete', [BankController::class, 'delete'])->setName('banks.delete');
     $app->get('/banks/{id}/accounts', [BankController::class, 'accounts'])->setName('banks.accounts');
     
+    // Account Routes
+    $app->get('/accounts/{id}', [\App\Controllers\AccountController::class, 'show'])->setName('accounts.show');
+    
     // Settings Routes
     $app->get('/settings', [\App\Controllers\SettingsController::class, 'index'])->setName('settings');
     $app->post('/settings', [\App\Controllers\SettingsController::class, 'save'])->setName('settings.save');
@@ -25,4 +28,6 @@ return function (App $app) {
     $app->get('/api/banks/{id}/accounts', [ApiController::class, 'getAccounts'])->setName('api.banks.accounts');
     $app->post('/api/banks/{id}/tan', [ApiController::class, 'submitTan'])->setName('api.banks.tan');
     $app->post('/api/banks/{id}/decoupled', [ApiController::class, 'checkDecoupled'])->setName('api.banks.decoupled');
+    $app->get('/api/accounts/{id}/transactions', [ApiController::class, 'getTransactions'])->setName('api.accounts.transactions');
+    $app->post('/api/accounts/{id}/sync', [ApiController::class, 'syncAccount'])->setName('api.accounts.sync');
 };
