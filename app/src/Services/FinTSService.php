@@ -1203,6 +1203,209 @@ class FinTSService
     }
 
     /**
+     * Continue sync after login TAN was confirmed
+     * This picks up where syncAccountTransactions left off after login
+     */
+    public function continueSyncAfterLogin(array $bankConfig, string $persistedInstance, string $accountIdentifier, \DateTime $from, \DateTime $to): array
+    {
+        $this->logger->info('=== continueSyncAfterLogin START ===', [
+            'account' => $accountIdentifier,
+            'from' => $from->format('Y-m-d'),
+            'to' => $to->format('Y-m-d')
+        ]);
+        
+        try {
+            $options = $this->createOptions($bankConfig);
+            $credentials = $this->createCredentials($bankConfig);
+            
+            // Restore the FinTS instance from persisted state (already logged in)
+            $this->finTs = FinTs::new($options, $credentials, $persistedInstance);
+            $this->selectTanMode();
+            
+            // Get SEPA accounts
+            $this->logger->info('Getting SEPA accounts');
+            $getSepaAccounts = GetSEPAAccounts::create();
+            $this->finTs->execute($getSepaAccounts);
+
+            if ($getSepaAccounts->needsTan()) {
+                $this->logger->info('GetSEPAAccounts requires TAN');
+                return [
+                    'success' => false,
+                    'needs_tan' => true,
+                    'tan_request' => $this->extractTanRequest($getSepaAccounts),
+                    'persisted_action' => base64_encode(serialize($getSepaAccounts)),
+                    'persisted_instance' => $this->finTs->persist()
+                ];
+            }
+
+            // Find the matching account
+            $sepaAccount = null;
+            foreach ($getSepaAccounts->getAccounts() as $acc) {
+                if ($acc->getIban() === $accountIdentifier || $acc->getAccountNumber() === $accountIdentifier) {
+                    $sepaAccount = $acc;
+                    break;
+                }
+            }
+
+            if (!$sepaAccount) {
+                $this->logger->error('Account not found', ['identifier' => $accountIdentifier]);
+                return [
+                    'success' => false,
+                    'message' => 'Konto nicht gefunden: ' . $accountIdentifier
+                ];
+            }
+
+            $this->logger->info('Found account, fetching transactions', [
+                'iban' => $sepaAccount->getIban(),
+                'from' => $from->format('Y-m-d'),
+                'to' => $to->format('Y-m-d')
+            ]);
+
+            // Now fetch transactions - same logic as syncAccountTransactions
+            // Check BPD for supported formats
+            $supportsMT940 = false;
+            $supportsCAMT = false;
+            
+            try {
+                $bpd = $this->finTs->getBpd();
+                if ($bpd) {
+                    $mt940Params = $bpd->parameters['HIKAZS'] ?? [];
+                    $camtParams = $bpd->parameters['HICAZS'] ?? [];
+                    
+                    foreach (array_keys($mt940Params) as $version) {
+                        if (in_array((int)$version, [4, 5, 6, 7])) {
+                            $supportsMT940 = true;
+                            break;
+                        }
+                    }
+                    
+                    foreach (array_keys($camtParams) as $version) {
+                        if ((int)$version === 1) {
+                            $supportsCAMT = true;
+                            break;
+                        }
+                    }
+                    
+                    $this->logger->info('Format support detected', [
+                        'mt940' => $supportsMT940,
+                        'camt' => $supportsCAMT
+                    ]);
+                }
+            } catch (Exception $e) {
+                $this->logger->warning('Could not check BPD', ['error' => $e->getMessage()]);
+                $supportsMT940 = true;
+                $supportsCAMT = true;
+            }
+
+            $errors = [];
+            $mt940Result = null;
+            
+            // Try MT940
+            if ($supportsMT940) {
+                $this->logger->info('Trying MT940 format');
+                try {
+                    $getStatement = GetStatementOfAccount::create($sepaAccount, $from, $to);
+                    $this->finTs->execute($getStatement);
+
+                    if ($getStatement->needsTan()) {
+                        $this->logger->info('GetStatementOfAccount requires TAN');
+                        return [
+                            'success' => false,
+                            'needs_tan' => true,
+                            'tan_request' => $this->extractTanRequest($getStatement),
+                            'persisted_action' => base64_encode(serialize($getStatement)),
+                            'persisted_instance' => $this->finTs->persist()
+                        ];
+                    }
+
+                    $mt940Result = $this->processTransactionsResult($getStatement);
+                    if ($mt940Result['success']) {
+                        $txCount = count($mt940Result['transactions'] ?? []);
+                        $this->logger->info('MT940 fetch successful', ['transactions' => $txCount]);
+                        
+                        if ($txCount > 0) {
+                            return $mt940Result;
+                        }
+                        $this->logger->info('MT940 returned 0 transactions, trying CAMT');
+                    } else {
+                        $errors['MT940'] = $mt940Result['message'] ?? 'Unbekannter Fehler';
+                    }
+                } catch (\Throwable $e) {
+                    $errors['MT940'] = $e->getMessage();
+                    $this->logger->info('MT940 failed', ['error' => $e->getMessage()]);
+                }
+            }
+
+            // Try CAMT
+            $camtResult = null;
+            if ($supportsCAMT) {
+                $this->logger->info('Trying CAMT XML format');
+                try {
+                    $camtResult = $this->fetchTransactionsXML($sepaAccount, $from, $to);
+                    
+                    if (isset($camtResult['success']) && $camtResult['success']) {
+                        $txCount = count($camtResult['transactions'] ?? []);
+                        $this->logger->info('CAMT XML successful', ['transactions' => $txCount]);
+                        
+                        if ($txCount > 0) {
+                            return $camtResult;
+                        }
+                    }
+                    if (isset($camtResult['needs_tan']) && $camtResult['needs_tan']) {
+                        return $camtResult;
+                    }
+                    
+                    if (!($camtResult['success'] ?? false)) {
+                        $errors['CAMT'] = $camtResult['message'] ?? 'Unbekannter Fehler';
+                    }
+                } catch (\Throwable $e) {
+                    $errors['CAMT'] = $e->getMessage();
+                    $this->logger->warning('CAMT failed', ['error' => $e->getMessage()]);
+                }
+            }
+
+            // Return MT940 result even with 0 transactions
+            if ($mt940Result !== null && ($mt940Result['success'] ?? false)) {
+                $this->logger->info('Returning MT940 result', [
+                    'transactions' => count($mt940Result['transactions'] ?? [])
+                ]);
+                return $mt940Result;
+            }
+            
+            if ($camtResult !== null && ($camtResult['success'] ?? false)) {
+                return $camtResult;
+            }
+
+            if (empty($errors)) {
+                return [
+                    'success' => false,
+                    'message' => 'Diese Bank unterstützt keinen Transaktionsabruf über FinTS.'
+                ];
+            }
+
+            $errorMsg = 'Transaktionsabruf fehlgeschlagen.';
+            foreach ($errors as $format => $error) {
+                $errorMsg .= " $format: $error";
+            }
+            
+            return [
+                'success' => false,
+                'message' => $errorMsg
+            ];
+
+        } catch (\Throwable $e) {
+            $this->logger->error('continueSyncAfterLogin failed', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+            return [
+                'success' => false,
+                'message' => 'Fehler: ' . $e->getMessage()
+            ];
+        }
+    }
+
+    /**
      * Get TAN modes
      */
     public function getTanModes(array $bankConfig): array

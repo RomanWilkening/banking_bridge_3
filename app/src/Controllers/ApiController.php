@@ -268,7 +268,7 @@ class ApiController
             ]);
         }
 
-        // Clean up session on success
+        // Clean up action session
         unset($_SESSION['fints_action_' . $bankId]);
 
         // Store accounts if we got them
@@ -279,6 +279,93 @@ class ApiController
             
             if (isset($result['persisted_instance'])) {
                 $this->db->saveFinTSSession($bankId, $result['persisted_instance']);
+            }
+        }
+        
+        // Check if there's a pending sync operation to continue
+        $pendingSyncAccountId = $_SESSION['fints_sync_account_id'] ?? null;
+        if ($pendingSyncAccountId && $result['success']) {
+            $this->logger->info('Continuing pending sync after TAN confirmation', [
+                'account_id' => $pendingSyncAccountId
+            ]);
+            
+            // Clean up sync session marker
+            unset($_SESSION['fints_sync_account_id']);
+            
+            // Get account and bank info
+            $account = $this->db->getAccountById($pendingSyncAccountId);
+            if ($account) {
+                // Save the session from login first
+                if (isset($result['persisted_instance'])) {
+                    $this->db->saveFinTSSession($bankId, $result['persisted_instance']);
+                }
+                
+                // Continue with transaction fetching
+                $from = new \DateTime('-30 days');
+                $to = new \DateTime();
+                
+                $this->logger->info('Starting transaction fetch after TAN', [
+                    'account_id' => $pendingSyncAccountId,
+                    'from' => $from->format('Y-m-d'),
+                    'to' => $to->format('Y-m-d')
+                ]);
+                
+                // Use continueSyncAfterLogin which picks up after successful login
+                $syncResult = $this->fintsService->continueSyncAfterLogin(
+                    [
+                        'bank_code' => $bank['bank_code'],
+                        'fints_url' => $bank['fints_url'],
+                        'username' => $bank['username'],
+                        'password' => $bank['password']
+                    ],
+                    $result['persisted_instance'] ?? $this->db->getFinTSSession($bankId)['session_data'],
+                    $account['iban'] ?? $account['account_number'],
+                    $from,
+                    $to
+                );
+                
+                // Handle TAN requirement for transaction fetch
+                if (isset($syncResult['needs_tan']) && $syncResult['needs_tan']) {
+                    $this->db->saveFinTSSession($bankId, $syncResult['persisted_instance']);
+                    $_SESSION['fints_action_' . $bankId] = $syncResult['persisted_action'];
+                    $_SESSION['fints_sync_account_id'] = $pendingSyncAccountId;
+                    
+                    return $this->jsonResponse($response, [
+                        'success' => false,
+                        'needs_tan' => true,
+                        'tan_request' => $syncResult['tan_request']
+                    ]);
+                }
+                
+                if ($syncResult['success']) {
+                    // Save transactions
+                    if (isset($syncResult['transactions'])) {
+                        $count = $this->db->saveTransactions($pendingSyncAccountId, $syncResult['transactions']);
+                        $this->logger->info('Saved transactions after TAN', ['count' => $count]);
+                    }
+                    
+                    // Update balance
+                    if (isset($syncResult['balance'])) {
+                        $this->db->updateAccountBalance($pendingSyncAccountId, $syncResult['balance'], $syncResult['balance_date'] ?? null);
+                    }
+                    
+                    // Save session
+                    if (isset($syncResult['persisted_instance'])) {
+                        $this->db->saveFinTSSession($bankId, $syncResult['persisted_instance']);
+                    }
+                    
+                    return $this->jsonResponse($response, [
+                        'success' => true,
+                        'message' => 'Transaktionen synchronisiert',
+                        'count' => count($syncResult['transactions'] ?? []),
+                        'balance' => $syncResult['balance'] ?? null
+                    ]);
+                } else {
+                    return $this->jsonResponse($response, [
+                        'success' => false,
+                        'message' => $syncResult['message'] ?? 'Sync fehlgeschlagen'
+                    ]);
+                }
             }
         }
 
