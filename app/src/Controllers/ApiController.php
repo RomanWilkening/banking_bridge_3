@@ -406,6 +406,71 @@ class ApiController
     }
 
     /**
+     * Get bank capabilities (what features the bank supports)
+     */
+    public function getBankCapabilities(Request $request, Response $response, array $args): Response
+    {
+        $bankId = (int) $args['id'];
+        $bank = $this->db->getBankById($bankId);
+        
+        if (!$bank) {
+            return $this->jsonResponse($response, [
+                'success' => false,
+                'message' => 'Bank nicht gefunden'
+            ], 404);
+        }
+
+        // Check if we have cached capabilities
+        $cached = $this->db->getBankCapabilities($bankId);
+        $forceRefresh = ($request->getQueryParams()['refresh'] ?? '') === '1';
+        
+        // Return cached if available and not forcing refresh (cache for 24 hours)
+        if ($cached && !$forceRefresh) {
+            $lastUpdated = strtotime($cached['last_updated'] ?? '');
+            $cacheAge = time() - $lastUpdated;
+            
+            if ($cacheAge < 86400) { // 24 hours
+                return $this->jsonResponse($response, [
+                    'success' => true,
+                    'capabilities' => $cached,
+                    'cached' => true,
+                    'cache_age' => $cacheAge
+                ]);
+            }
+        }
+
+        // Fetch fresh capabilities from bank
+        $result = $this->fintsService->getBankCapabilities([
+            'bank_code' => $bank['bank_code'],
+            'fints_url' => $bank['fints_url'],
+            'username' => $bank['username'],
+            'password' => $bank['password']
+        ]);
+
+        if (!$result['success']) {
+            // If we have cached data, return it with error note
+            if ($cached) {
+                return $this->jsonResponse($response, [
+                    'success' => true,
+                    'capabilities' => $cached,
+                    'cached' => true,
+                    'refresh_error' => $result['message'] ?? 'Aktualisierung fehlgeschlagen'
+                ]);
+            }
+            return $this->jsonResponse($response, $result);
+        }
+
+        // Save to database
+        $this->db->saveBankCapabilities($bankId, $result['capabilities']);
+
+        return $this->jsonResponse($response, [
+            'success' => true,
+            'capabilities' => $result['capabilities'],
+            'cached' => false
+        ]);
+    }
+
+    /**
      * Helper to create JSON response
      */
     private function jsonResponse(Response $response, array $data, int $status = 200): Response

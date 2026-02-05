@@ -990,4 +990,122 @@ class FinTSService
             $this->finTs = null;
         }
     }
+
+    /**
+     * Fetch Bank Parameter Data (BPD) and extract supported capabilities
+     * 
+     * This queries the bank to find out which FinTS features it supports,
+     * particularly for transaction retrieval (HIKAZS/HICAZS).
+     */
+    public function getBankCapabilities(array $bankConfig): array
+    {
+        try {
+            $options = $this->createOptions($bankConfig);
+            
+            // Fetch BPD without credentials (anonymous)
+            $bpd = FinTs::fetchBpd($options);
+            
+            $capabilities = [
+                'bank_name' => $bpd->getBankName(),
+                'bpd_version' => $bpd->getVersion(),
+                'supports_psd2' => $bpd->supportsPsd2(),
+                'mt940_versions' => [],
+                'camt_versions' => [],
+                'supports_balance' => false,
+                'supports_sepa_accounts' => false,
+                'tan_modes' => [],
+                'all_parameters' => [],
+            ];
+
+            // Check HIKAZS (MT940 transaction retrieval) versions
+            $hikazsParams = $bpd->parameters['HIKAZS'] ?? [];
+            foreach ($hikazsParams as $version => $segment) {
+                $capabilities['mt940_versions'][] = $version;
+            }
+            sort($capabilities['mt940_versions']);
+
+            // Check HICAZS (CAMT XML transaction retrieval) versions
+            $hicazsParams = $bpd->parameters['HICAZS'] ?? [];
+            foreach ($hicazsParams as $version => $segment) {
+                $capabilities['camt_versions'][] = $version;
+            }
+            sort($capabilities['camt_versions']);
+
+            // Check balance support (HISALS)
+            $hisalsParams = $bpd->parameters['HISALS'] ?? [];
+            $capabilities['supports_balance'] = !empty($hisalsParams);
+            $capabilities['balance_versions'] = array_keys($hisalsParams);
+
+            // Check SEPA accounts support (HISPAS)
+            $hispasParams = $bpd->parameters['HISPAS'] ?? [];
+            $capabilities['supports_sepa_accounts'] = !empty($hispasParams);
+
+            // Determine transaction support status
+            $capabilities['mt940_supported'] = $this->checkMT940Support($capabilities['mt940_versions']);
+            $capabilities['camt_supported'] = $this->checkCAMTSupport($capabilities['camt_versions']);
+            $capabilities['transactions_supported'] = $capabilities['mt940_supported'] || $capabilities['camt_supported'];
+
+            // Get all parameter segment names for reference
+            foreach ($bpd->parameters as $segmentName => $versions) {
+                $capabilities['all_parameters'][$segmentName] = array_keys($versions);
+            }
+
+            // Get TAN modes
+            foreach ($bpd->allTanModes as $id => $mode) {
+                $capabilities['tan_modes'][] = [
+                    'id' => $mode->getId(),
+                    'name' => $mode->getName(),
+                    'is_decoupled' => method_exists($mode, 'isDecoupled') ? $mode->isDecoupled() : false,
+                ];
+            }
+
+            $this->logger->info('Bank capabilities fetched', [
+                'bank' => $capabilities['bank_name'],
+                'mt940_versions' => $capabilities['mt940_versions'],
+                'camt_versions' => $capabilities['camt_versions'],
+            ]);
+
+            return [
+                'success' => true,
+                'capabilities' => $capabilities
+            ];
+
+        } catch (Exception $e) {
+            $this->logger->error('Failed to fetch BPD', ['error' => $e->getMessage()]);
+            return [
+                'success' => false,
+                'message' => 'Fehler beim Abrufen der Bankparameter: ' . $e->getMessage()
+            ];
+        }
+    }
+
+    /**
+     * Check if any MT940 version is supported by phpFinTS
+     * phpFinTS supports HIKAZS versions 4, 5, 6, 7
+     */
+    private function checkMT940Support(array $versions): bool
+    {
+        $supportedVersions = [4, 5, 6, 7];
+        foreach ($versions as $version) {
+            if (in_array((int)$version, $supportedVersions)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Check if any CAMT version is supported by phpFinTS
+     * phpFinTS supports HICAZS version 1
+     */
+    private function checkCAMTSupport(array $versions): bool
+    {
+        $supportedVersions = [1];
+        foreach ($versions as $version) {
+            if (in_array((int)$version, $supportedVersions)) {
+                return true;
+            }
+        }
+        return false;
+    }
 }

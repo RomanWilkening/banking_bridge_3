@@ -30,6 +30,37 @@
                         <p class="text-sm text-gray-500">BLZ: {{ bank.bank_code }}</p>
                     </div>
                 </div>
+
+                <!-- Capability Badges -->
+                {% if bank.capabilities %}
+                <div class="mt-3 flex flex-wrap gap-1">
+                    {% if bank.capabilities.transactions_supported %}
+                    <span class="inline-flex items-center rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-800" title="Transaktionsabruf möglich">
+                        ✓ Transaktionen
+                    </span>
+                    {% else %}
+                    <span class="inline-flex items-center rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-800" title="Transaktionsabruf nicht unterstützt">
+                        ✗ Transaktionen
+                    </span>
+                    {% endif %}
+                    {% if bank.capabilities.mt940_supported %}
+                    <span class="inline-flex items-center rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-800" title="MT940 Format">
+                        MT940
+                    </span>
+                    {% endif %}
+                    {% if bank.capabilities.camt_supported %}
+                    <span class="inline-flex items-center rounded-full bg-purple-100 px-2 py-0.5 text-xs font-medium text-purple-800" title="CAMT XML Format">
+                        CAMT
+                    </span>
+                    {% endif %}
+                </div>
+                {% else %}
+                <div class="mt-3">
+                    <span class="inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600">
+                        Fähigkeiten nicht abgerufen
+                    </span>
+                </div>
+                {% endif %}
                 
                 {% if bank.accounts|length > 0 %}
                 <div class="mt-4 border-t border-gray-200 pt-4">

@@ -113,6 +113,28 @@ class DatabaseService
             CREATE INDEX IF NOT EXISTS idx_transactions_account_date 
             ON transactions(account_id, booking_date DESC)
         ");
+
+        $this->pdo->exec("
+            CREATE TABLE IF NOT EXISTS bank_capabilities (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                bank_id INTEGER NOT NULL UNIQUE,
+                bank_name_from_bpd TEXT,
+                bpd_version INTEGER,
+                supports_psd2 INTEGER DEFAULT 0,
+                mt940_versions TEXT,
+                camt_versions TEXT,
+                balance_versions TEXT,
+                mt940_supported INTEGER DEFAULT 0,
+                camt_supported INTEGER DEFAULT 0,
+                transactions_supported INTEGER DEFAULT 0,
+                supports_balance INTEGER DEFAULT 0,
+                supports_sepa_accounts INTEGER DEFAULT 0,
+                tan_modes TEXT,
+                all_parameters TEXT,
+                last_updated DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (bank_id) REFERENCES banks(id) ON DELETE CASCADE
+            )
+        ");
     }
 
     public function getPdo(): PDO
@@ -376,5 +398,70 @@ class DatabaseService
             WHERE id = ?
         ");
         return $stmt->execute([$balance, $balanceDate ?? date('Y-m-d H:i:s'), $accountId]);
+    }
+
+    // Bank Capabilities Methods
+    public function saveBankCapabilities(int $bankId, array $capabilities): bool
+    {
+        $stmt = $this->pdo->prepare("
+            INSERT OR REPLACE INTO bank_capabilities (
+                bank_id, bank_name_from_bpd, bpd_version, supports_psd2,
+                mt940_versions, camt_versions, balance_versions,
+                mt940_supported, camt_supported, transactions_supported,
+                supports_balance, supports_sepa_accounts,
+                tan_modes, all_parameters, last_updated
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        ");
+        
+        return $stmt->execute([
+            $bankId,
+            $capabilities['bank_name'] ?? null,
+            $capabilities['bpd_version'] ?? null,
+            ($capabilities['supports_psd2'] ?? false) ? 1 : 0,
+            json_encode($capabilities['mt940_versions'] ?? []),
+            json_encode($capabilities['camt_versions'] ?? []),
+            json_encode($capabilities['balance_versions'] ?? []),
+            ($capabilities['mt940_supported'] ?? false) ? 1 : 0,
+            ($capabilities['camt_supported'] ?? false) ? 1 : 0,
+            ($capabilities['transactions_supported'] ?? false) ? 1 : 0,
+            ($capabilities['supports_balance'] ?? false) ? 1 : 0,
+            ($capabilities['supports_sepa_accounts'] ?? false) ? 1 : 0,
+            json_encode($capabilities['tan_modes'] ?? []),
+            json_encode($capabilities['all_parameters'] ?? []),
+        ]);
+    }
+
+    public function getBankCapabilities(int $bankId): ?array
+    {
+        $stmt = $this->pdo->prepare("SELECT * FROM bank_capabilities WHERE bank_id = ?");
+        $stmt->execute([$bankId]);
+        $result = $stmt->fetch();
+        
+        if (!$result) {
+            return null;
+        }
+
+        // Decode JSON fields
+        $result['mt940_versions'] = json_decode($result['mt940_versions'] ?? '[]', true) ?: [];
+        $result['camt_versions'] = json_decode($result['camt_versions'] ?? '[]', true) ?: [];
+        $result['balance_versions'] = json_decode($result['balance_versions'] ?? '[]', true) ?: [];
+        $result['tan_modes'] = json_decode($result['tan_modes'] ?? '[]', true) ?: [];
+        $result['all_parameters'] = json_decode($result['all_parameters'] ?? '[]', true) ?: [];
+        
+        // Convert integers back to booleans
+        $result['supports_psd2'] = (bool) $result['supports_psd2'];
+        $result['mt940_supported'] = (bool) $result['mt940_supported'];
+        $result['camt_supported'] = (bool) $result['camt_supported'];
+        $result['transactions_supported'] = (bool) $result['transactions_supported'];
+        $result['supports_balance'] = (bool) $result['supports_balance'];
+        $result['supports_sepa_accounts'] = (bool) $result['supports_sepa_accounts'];
+
+        return $result;
+    }
+
+    public function deleteBankCapabilities(int $bankId): bool
+    {
+        $stmt = $this->pdo->prepare("DELETE FROM bank_capabilities WHERE bank_id = ?");
+        return $stmt->execute([$bankId]);
     }
 }

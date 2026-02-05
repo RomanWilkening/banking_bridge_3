@@ -24,6 +24,7 @@ class BankController
         
         foreach ($banks as &$bank) {
             $bank['accounts'] = $this->db->getAccountsByBankId($bank['id']);
+            $bank['capabilities'] = $this->db->getBankCapabilities($bank['id']);
         }
 
         return $this->view->render($response, 'banks/index.twig', [
