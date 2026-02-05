@@ -34,6 +34,7 @@
                 <!-- Capability Badges -->
                 {% if bank.capabilities %}
                 <div class="mt-3 flex flex-wrap gap-1">
+                    {# Transaction Support #}
                     {% if bank.capabilities.transactions_supported %}
                     <span class="inline-flex items-center rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-800" title="Transaktionsabruf möglich">
                         ✓ Transaktionen
@@ -43,14 +44,32 @@
                         ✗ Transaktionen
                     </span>
                     {% endif %}
-                    {% if bank.capabilities.mt940_supported %}
-                    <span class="inline-flex items-center rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-800" title="MT940 Format">
-                        MT940
+                    
+                    {# Depot Support #}
+                    {% if bank.capabilities.read.depot.supported is defined and bank.capabilities.read.depot.supported %}
+                    <span class="inline-flex items-center rounded-full bg-indigo-100 px-2 py-0.5 text-xs font-medium text-indigo-800" title="Depotabruf möglich">
+                        📈 Depot
                     </span>
                     {% endif %}
-                    {% if bank.capabilities.camt_supported %}
-                    <span class="inline-flex items-center rounded-full bg-purple-100 px-2 py-0.5 text-xs font-medium text-purple-800" title="CAMT XML Format">
-                        CAMT
+                    
+                    {# Instant Transfer #}
+                    {% if bank.capabilities.transfers.instant.supported is defined and bank.capabilities.transfers.instant.supported %}
+                    <span class="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800" title="Echtzeit-Überweisung möglich">
+                        ⚡ Instant
+                    </span>
+                    {% endif %}
+                    
+                    {# Transfer Support #}
+                    {% if bank.capabilities.transfers.sepa_single.supported is defined and bank.capabilities.transfers.sepa_single.supported %}
+                    <span class="inline-flex items-center rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-800" title="SEPA-Überweisung möglich">
+                        💸 Überweisung
+                    </span>
+                    {% endif %}
+                    
+                    {# Direct Debit Support #}
+                    {% if bank.capabilities.direct_debits.sepa_single.supported is defined and bank.capabilities.direct_debits.sepa_single.supported %}
+                    <span class="inline-flex items-center rounded-full bg-purple-100 px-2 py-0.5 text-xs font-medium text-purple-800" title="SEPA-Lastschrift möglich">
+                        📥 Lastschrift
                     </span>
                     {% endif %}
                 </div>

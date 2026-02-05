@@ -131,6 +131,9 @@ class DatabaseService
                 supports_sepa_accounts INTEGER DEFAULT 0,
                 tan_modes TEXT,
                 all_parameters TEXT,
+                read_capabilities TEXT,
+                transfer_capabilities TEXT,
+                direct_debit_capabilities TEXT,
                 last_updated DATETIME DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (bank_id) REFERENCES banks(id) ON DELETE CASCADE
             )
@@ -409,8 +412,10 @@ class DatabaseService
                 mt940_versions, camt_versions, balance_versions,
                 mt940_supported, camt_supported, transactions_supported,
                 supports_balance, supports_sepa_accounts,
-                tan_modes, all_parameters, last_updated
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                tan_modes, all_parameters,
+                read_capabilities, transfer_capabilities, direct_debit_capabilities,
+                last_updated
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
         ");
         
         return $stmt->execute([
@@ -428,6 +433,9 @@ class DatabaseService
             ($capabilities['supports_sepa_accounts'] ?? false) ? 1 : 0,
             json_encode($capabilities['tan_modes'] ?? []),
             json_encode($capabilities['all_parameters'] ?? []),
+            json_encode($capabilities['read'] ?? []),
+            json_encode($capabilities['transfers'] ?? []),
+            json_encode($capabilities['direct_debits'] ?? []),
         ]);
     }
 
@@ -447,6 +455,9 @@ class DatabaseService
         $result['balance_versions'] = json_decode($result['balance_versions'] ?? '[]', true) ?: [];
         $result['tan_modes'] = json_decode($result['tan_modes'] ?? '[]', true) ?: [];
         $result['all_parameters'] = json_decode($result['all_parameters'] ?? '[]', true) ?: [];
+        $result['read'] = json_decode($result['read_capabilities'] ?? '[]', true) ?: [];
+        $result['transfers'] = json_decode($result['transfer_capabilities'] ?? '[]', true) ?: [];
+        $result['direct_debits'] = json_decode($result['direct_debit_capabilities'] ?? '[]', true) ?: [];
         
         // Convert integers back to booleans
         $result['supports_psd2'] = (bool) $result['supports_psd2'];
