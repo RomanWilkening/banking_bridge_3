@@ -416,12 +416,16 @@ class DatabaseService
         $stmt = $this->pdo->prepare("DELETE FROM fints_sessions WHERE bank_id = ?");
         $stmt->execute([$bankId]);
 
+        // Base64-encode the session data to safely store binary data
+        // phpFinTS persist() returns serialized data that may contain binary content
+        $encodedSessionData = base64_encode($sessionData);
+
         // Store session for 90 days (PSD2 allows TAN-free access within this window)
         $stmt = $this->pdo->prepare("
             INSERT INTO fints_sessions (bank_id, session_data, tan_mode, tan_medium, expires_at)
             VALUES (?, ?, ?, ?, datetime('now', '+90 days'))
         ");
-        $stmt->execute([$bankId, $sessionData, $tanMode, $tanMedium]);
+        $stmt->execute([$bankId, $encodedSessionData, $tanMode, $tanMedium]);
         return (int) $this->pdo->lastInsertId();
     }
 
@@ -434,6 +438,16 @@ class DatabaseService
         ");
         $stmt->execute([$bankId]);
         $result = $stmt->fetch();
+        
+        if ($result && !empty($result['session_data'])) {
+            // Decode the base64-encoded session data
+            $decoded = base64_decode($result['session_data'], true);
+            if ($decoded !== false) {
+                $result['session_data'] = $decoded;
+            }
+            // If decode fails, the data might be in old format (not base64) - keep as is
+        }
+        
         return $result ?: null;
     }
 

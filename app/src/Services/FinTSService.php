@@ -443,11 +443,24 @@ class FinTSService
             
             // Use persisted instance if available (preserves kundensystemId for PSD2 90-day TAN-free access)
             if ($persistedInstance !== null) {
-                $this->logger->info('Restoring persisted FinTS instance');
+                $this->logger->info('=== RESTORING PERSISTED SESSION ===', [
+                    'data_length' => strlen($persistedInstance)
+                ]);
                 $this->finTs = FinTs::new($options, $credentials, $persistedInstance);
+                
+                // Log what was restored
+                try {
+                    $bpd = $this->finTs->getBpd();
+                    $this->logger->info('Session restored successfully', [
+                        'has_bpd' => $bpd !== null,
+                        'bank_name' => $bpd ? ($bpd->bankName ?? 'unknown') : 'no BPD'
+                    ]);
+                } catch (\Throwable $e) {
+                    $this->logger->warning('Could not get BPD from restored session', ['error' => $e->getMessage()]);
+                }
                 // Don't re-select TAN mode when restoring - it's already in the persisted state
             } else {
-                $this->logger->info('Creating new FinTS instance');
+                $this->logger->info('=== CREATING NEW SESSION ===');
                 $this->finTs = FinTs::new($options, $credentials);
                 // Select TAN mode only for new sessions
                 $this->selectTanMode();

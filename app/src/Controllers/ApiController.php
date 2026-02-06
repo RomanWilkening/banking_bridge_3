@@ -228,9 +228,12 @@ class ApiController
         $existingSession = $this->db->getFinTSSession($bankId);
         $persistedInstance = $existingSession ? $existingSession['session_data'] : null;
         
-        $this->logger->info('SyncAll using session', [
-            'has_existing_session' => $persistedInstance !== null,
-            'session_created' => $existingSession['created_at'] ?? null
+        $this->logger->info('=== SyncAll SESSION CHECK ===', [
+            'bank_id' => $bankId,
+            'has_existing_session' => $existingSession !== null,
+            'session_data_length' => $persistedInstance ? strlen($persistedInstance) : 0,
+            'session_created' => $existingSession['created_at'] ?? null,
+            'session_expires' => $existingSession['expires_at'] ?? null
         ]);
         
         $result = $this->fintsService->syncAll(
@@ -725,8 +728,12 @@ class ApiController
         $existingSession = $this->db->getFinTSSession($bank['id']);
         $persistedInstance = $existingSession ? $existingSession['session_data'] : null;
         
-        $this->logger->info('SyncAccount using session', [
-            'has_existing_session' => $persistedInstance !== null
+        $this->logger->info('=== SyncAccount SESSION CHECK ===', [
+            'bank_id' => $bank['id'],
+            'account_id' => $accountId,
+            'has_existing_session' => $existingSession !== null,
+            'session_data_length' => $persistedInstance ? strlen($persistedInstance) : 0,
+            'session_created' => $existingSession['created_at'] ?? null
         ]);
 
         // Use the combined sync method in FinTSService
