@@ -9,8 +9,20 @@
                 <span class="inline-flex items-center justify-center h-14 w-14 rounded-full bg-purple-100">
                     <span class="text-2xl">📈</span>
                 </span>
-                <div class="ml-4">
-                    <h3 class="text-lg font-medium text-gray-900">{{ account.account_name ?? 'Depot' }}</h3>
+                <div class="ml-4" x-data="editableName('account', {{ account.id }}, '{{ (account.custom_name ?? account.account_name ?? 'Depot')|e('js') }}')">
+                    <div class="flex items-center gap-2">
+                        <h3 x-show="!editing" class="text-lg font-medium text-gray-900" x-text="displayName"></h3>
+                        <input x-show="editing" x-model="editName" @keyup.enter="save" @keyup.escape="cancel"
+                               x-ref="nameInput" type="text"
+                               class="text-lg font-medium text-gray-900 border-b border-purple-500 focus:outline-none bg-transparent">
+                        <button x-show="!editing" @click="edit" class="text-gray-400 hover:text-purple-500" title="Umbenennen">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/>
+                            </svg>
+                        </button>
+                        <button x-show="editing" @click="save" class="text-green-500 hover:text-green-600">✓</button>
+                        <button x-show="editing" @click="cancel" class="text-red-500 hover:text-red-600">✕</button>
+                    </div>
                     <p class="text-sm text-gray-500">Depot {{ account.account_number }}</p>
                     <p class="text-xs text-gray-400">{{ bank.name }}</p>
                 </div>
@@ -33,8 +45,11 @@
         </div>
         
         <div class="px-4 py-3 bg-gray-50 flex justify-between items-center">
-            <div>
-                <span class="text-sm text-gray-500">{{ holdings_count }} Positionen</span>
+            <div class="flex gap-6 text-sm text-gray-500">
+                <span>{{ holdings_count }} Wertpapiere</span>
+                {% if linked_accounts_count > 0 %}
+                <span>+ {{ linked_accounts_count }} verknüpfte Konten</span>
+                {% endif %}
             </div>
             <button @click="syncHoldings" :disabled="syncing"
                     class="inline-flex items-center rounded-md bg-purple-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-purple-500 disabled:opacity-50">
@@ -42,6 +57,26 @@
                 <span x-text="syncing ? 'Synchronisiere...' : 'Depotbestand abrufen'"></span>
             </button>
         </div>
+        
+        {% if linked_accounts_count > 0 %}
+        <!-- Summary with breakdown -->
+        <div class="px-4 py-3 border-t border-gray-200">
+            <div class="grid grid-cols-3 gap-4 text-sm">
+                <div>
+                    <span class="text-gray-500">Wertpapiere:</span>
+                    <span class="ml-2 font-medium">{{ securities_value|number_format(2, ',', '.') }} EUR</span>
+                </div>
+                <div>
+                    <span class="text-gray-500">Cash/Konten:</span>
+                    <span class="ml-2 font-medium">{{ linked_accounts_value|number_format(2, ',', '.') }} EUR</span>
+                </div>
+                <div>
+                    <span class="text-gray-500">Gesamt:</span>
+                    <span class="ml-2 font-bold">{{ total_value|number_format(2, ',', '.') }} EUR</span>
+                </div>
+            </div>
+        </div>
+        {% endif %}
     </div>
 
     <!-- TAN Modal -->
@@ -183,6 +218,44 @@
                         </td>
                     </tr>
                     {% endfor %}
+                    
+                    {% if linked_accounts|length > 0 %}
+                    <!-- Separator row -->
+                    <tr class="bg-blue-50">
+                        <td colspan="5" class="px-6 py-2 text-xs font-medium text-blue-700 uppercase">
+                            💰 Verknüpfte Konten (Cash)
+                        </td>
+                    </tr>
+                    {% for acc in linked_accounts %}
+                    <tr class="hover:bg-blue-50/50 bg-blue-50/20">
+                        <td class="px-6 py-4 text-sm text-gray-900">
+                            <div class="font-medium flex items-center gap-2">
+                                <span class="text-blue-500">💳</span>
+                                {{ acc.custom_name ?? acc.account_name ?? 'Konto' }}
+                            </div>
+                            <div class="text-xs text-gray-400">
+                                {{ acc.bank_name }} | {{ acc.iban }}
+                            </div>
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm text-right text-gray-500">
+                            -
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm text-right text-gray-500">
+                            -
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm text-right font-medium text-gray-900">
+                            {% if acc.balance is not null %}
+                            {{ acc.balance|number_format(2, ',', '.') }} {{ acc.currency }}
+                            {% else %}
+                            -
+                            {% endif %}
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm text-right text-gray-400">
+                            -
+                        </td>
+                    </tr>
+                    {% endfor %}
+                    {% endif %}
                 </tbody>
                 <tfoot class="bg-gray-50">
                     <tr>
@@ -216,6 +289,56 @@
 
 {% block scripts %}
 <script>
+function editableName(type, id, initialName) {
+    return {
+        type: type,
+        id: id,
+        displayName: initialName,
+        editName: initialName,
+        editing: false,
+        
+        edit() {
+            this.editName = this.displayName;
+            this.editing = true;
+            this.$nextTick(() => this.$refs.nameInput.focus());
+        },
+        
+        async save() {
+            if (!this.editName.trim()) {
+                this.cancel();
+                return;
+            }
+            
+            const url = this.type === 'bank' 
+                ? `/api/banks/${this.id}` 
+                : `/api/accounts/${this.id}`;
+            
+            try {
+                const response = await fetch(url, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name: this.editName.trim() })
+                });
+                const data = await response.json();
+                
+                if (data.success) {
+                    this.displayName = this.editName.trim();
+                    this.editing = false;
+                } else {
+                    alert(data.message || 'Fehler beim Speichern');
+                }
+            } catch (error) {
+                alert('Netzwerkfehler: ' + error.message);
+            }
+        },
+        
+        cancel() {
+            this.editName = this.displayName;
+            this.editing = false;
+        }
+    };
+}
+
 function depotDetails(accountId, bankId) {
     return {
         accountId: accountId,

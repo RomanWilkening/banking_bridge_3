@@ -22,6 +22,11 @@ Diese Dokumentation beschreibt alle verfügbaren API-Endpunkte der Banking Bridg
   - [Transaktionen abrufen](#transaktionen-abrufen)
   - [Transaktionen synchronisieren](#transaktionen-synchronisieren)
   - [Depot-Bestände synchronisieren](#depot-bestände-synchronisieren)
+- [Verwaltung API](#verwaltung-api)
+  - [Bank umbenennen](#bank-umbenennen)
+  - [Konto/Depot umbenennen](#kontodepot-umbenennen)
+  - [Konto mit Depot verknüpfen](#konto-mit-depot-verknüpfen)
+  - [Verfügbare Depots für Verknüpfung](#verfügbare-depots-für-verknüpfung)
 - [MQTT API](#mqtt-api)
   - [Verbindung testen](#mqtt-verbindung-testen)
   - [Daten veröffentlichen](#mqtt-daten-veröffentlichen)
@@ -81,29 +86,29 @@ Listet alle verfügbaren Depots mit Übersichtsinformationen auf.
   "depots": [
     {
       "id": 5,
-      "name": "Depot",
+      "name": "Hauptdepot",
       "account_number": "1234567",
       "sub_account": "01",
       "bank": "Consorsbank",
       "bank_code": "76030080",
+      "securities_value": 40000.00,
+      "linked_accounts_value": 5678.90,
       "total_value": 45678.90,
-      "currency": "EUR",
-      "last_update": "2024-01-15 10:30:00"
-    },
-    {
-      "id": 6,
-      "name": "Zweitdepot",
-      "account_number": "1234567",
-      "sub_account": "02",
-      "bank": "Consorsbank",
-      "bank_code": "76030080",
-      "total_value": 12345.67,
+      "linked_accounts_count": 1,
       "currency": "EUR",
       "last_update": "2024-01-15 10:30:00"
     }
   ]
 }
 ```
+
+**Felder:**
+| Feld | Typ | Beschreibung |
+|------|-----|--------------|
+| `securities_value` | float | Wert aller Wertpapiere |
+| `linked_accounts_value` | float | Summe aller verknüpften Konten |
+| `total_value` | float | Gesamtwert (Wertpapiere + verknüpfte Konten) |
+| `linked_accounts_count` | integer | Anzahl verknüpfter Konten |
 
 **Beispiel:**
 ```bash
@@ -129,15 +134,18 @@ Ruft Details zu einem spezifischen Depot ab.
   "success": true,
   "depot": {
     "id": 5,
-    "name": "Depot",
+    "name": "Hauptdepot",
     "account_number": "1234567",
     "sub_account": "01",
     "bank": "Consorsbank",
     "bank_code": "76030080",
+    "securities_value": 40000.00,
+    "linked_accounts_value": 5678.90,
     "total_value": 45678.90,
     "currency": "EUR",
     "last_update": "2024-01-15 10:30:00",
-    "holdings_count": 15
+    "holdings_count": 15,
+    "linked_accounts_count": 1
   }
 }
 ```
@@ -159,7 +167,7 @@ curl http://localhost:8080/api/v1/depots/5
 
 ### Depot-Bestände abrufen
 
-Listet alle Wertpapierbestände eines spezifischen Depots auf.
+Listet alle Wertpapierbestände und verknüpften Konten eines Depots auf.
 
 **Endpunkt:** `GET /api/v1/depots/{id}/holdings`
 
@@ -174,12 +182,20 @@ Listet alle Wertpapierbestände eines spezifischen Depots auf.
   "success": true,
   "depot": {
     "id": 5,
-    "name": "Depot",
+    "name": "Hauptdepot",
     "bank": "Consorsbank"
+  },
+  "summary": {
+    "securities_value": 13949.00,
+    "linked_accounts_value": 5000.00,
+    "total_value": 18949.00,
+    "securities_count": 2,
+    "linked_accounts_count": 1
   },
   "count": 3,
   "holdings": [
     {
+      "type": "security",
       "isin": "DE0007664039",
       "wkn": "766403",
       "name": "Volkswagen AG Vorzugsaktien",
@@ -194,6 +210,7 @@ Listet alle Wertpapierbestände eines spezifischen Depots auf.
       "updated_at": "2024-01-15 10:30:00"
     },
     {
+      "type": "security",
       "isin": "IE00B4L5Y983",
       "wkn": "A0RPWH",
       "name": "iShares Core MSCI World UCITS ETF",
@@ -206,6 +223,26 @@ Listet alle Wertpapierbestände eines spezifischen Depots auf.
       "profit_loss_percent": 17.57,
       "price_date": "2024-01-15",
       "updated_at": "2024-01-15 10:30:00"
+    },
+    {
+      "type": "cash",
+      "isin": null,
+      "wkn": null,
+      "name": "Tagesgeld (Sparkasse)",
+      "quantity": 1,
+      "currency": "EUR",
+      "current_price": 5000.00,
+      "purchase_price": null,
+      "total_value": 5000.00,
+      "profit_loss": null,
+      "profit_loss_percent": null,
+      "price_date": "2024-01-15",
+      "updated_at": "2024-01-15 10:30:00",
+      "linked_account": {
+        "id": 3,
+        "iban": "DE89370400440532013000",
+        "account_type": "checking"
+      }
     }
   ]
 }
@@ -215,18 +252,18 @@ Listet alle Wertpapierbestände eines spezifischen Depots auf.
 
 | Feld | Typ | Beschreibung |
 |------|-----|--------------|
-| `isin` | string | International Securities Identification Number |
-| `wkn` | string | Wertpapierkennnummer |
-| `name` | string | Name des Wertpapiers |
-| `quantity` | float | Anzahl der Stücke |
-| `currency` | string | Währung (z.B. "EUR") |
-| `current_price` | float | Aktueller Kurs (4 Dezimalstellen) |
-| `purchase_price` | float | Einstandskurs (4 Dezimalstellen) |
-| `total_value` | float | Gesamtwert (Menge × Kurs) |
-| `profit_loss` | float | Gewinn/Verlust absolut |
-| `profit_loss_percent` | float | Gewinn/Verlust in Prozent |
-| `price_date` | string | Datum des Kurses |
-| `updated_at` | string | Letzte Aktualisierung |
+| `type` | string | `security` für Wertpapiere, `cash` für verknüpfte Konten |
+| `isin` | string | ISIN (nur bei `security`) |
+| `wkn` | string | WKN (nur bei `security`) |
+| `name` | string | Name des Wertpapiers oder Kontos |
+| `quantity` | float | Anzahl der Stücke (bei `cash` immer 1) |
+| `currency` | string | Währung |
+| `current_price` | float | Aktueller Kurs / Kontostand |
+| `purchase_price` | float | Einstandskurs (nur bei `security`) |
+| `total_value` | float | Gesamtwert |
+| `profit_loss` | float | Gewinn/Verlust (nur bei `security`) |
+| `profit_loss_percent` | float | Gewinn/Verlust % (nur bei `security`) |
+| `linked_account` | object | Nur bei `cash`: Details zum verknüpften Konto |
 
 **Beispiel:**
 ```bash
@@ -576,6 +613,127 @@ Synchronisiert Wertpapierbestände eines Depots.
   "message": "Depotbestand synchronisiert",
   "count": 15,
   "total_value": 45678.90
+}
+```
+
+---
+
+## Verwaltung API
+
+### Bank umbenennen
+
+Ändert den Anzeigenamen einer Bank.
+
+**Endpunkt:** `PATCH /api/banks/{id}`
+
+**Request Body:**
+```json
+{
+  "name": "Meine Sparkasse"
+}
+```
+
+**Antwort:**
+```json
+{
+  "success": true,
+  "message": "Bank aktualisiert"
+}
+```
+
+---
+
+### Konto/Depot umbenennen
+
+Ändert den benutzerdefinierten Namen eines Kontos oder Depots. Der ursprüngliche Bankname bleibt erhalten.
+
+**Endpunkt:** `PATCH /api/accounts/{id}`
+
+**Request Body:**
+```json
+{
+  "name": "Tagesgeld"
+}
+```
+
+Um den Namen zurückzusetzen (auf den Originalnamen der Bank):
+```json
+{
+  "name": ""
+}
+```
+
+**Antwort:**
+```json
+{
+  "success": true,
+  "message": "Konto aktualisiert"
+}
+```
+
+---
+
+### Konto mit Depot verknüpfen
+
+Verknüpft ein Konto mit einem Depot. Das Konto erscheint dann als Cash-Position im Depot und wird zum Gesamtwert addiert.
+
+**Endpunkt:** `POST /api/accounts/{id}/link-depot`
+
+**Request Body:**
+```json
+{
+  "depot_id": 5
+}
+```
+
+Zum Aufheben der Verknüpfung:
+```json
+{
+  "depot_id": null
+}
+```
+
+**Antwort:**
+```json
+{
+  "success": true,
+  "message": "Konto mit Depot verknüpft",
+  "linked_depot_id": 5
+}
+```
+
+**Hinweise:**
+- Nur reguläre Konten (nicht Depots) können verknüpft werden
+- Ein Konto kann nur mit einem Depot verknüpft sein
+- Das verknüpfte Konto erscheint in der Depot-API als Position vom Typ `cash`
+
+---
+
+### Verfügbare Depots für Verknüpfung
+
+Listet alle Depots auf, mit denen ein Konto verknüpft werden kann.
+
+**Endpunkt:** `GET /api/depots-for-linking`
+
+**Query-Parameter:**
+| Parameter | Typ | Beschreibung |
+|-----------|-----|--------------|
+| `exclude` | integer | Account-ID die ausgeschlossen werden soll |
+
+**Antwort:**
+```json
+{
+  "success": true,
+  "depots": [
+    {
+      "id": 5,
+      "name": "Hauptdepot",
+      "account_number": "1234567",
+      "sub_account": "01",
+      "bank": "Consorsbank",
+      "label": "Hauptdepot (Consorsbank)"
+    }
+  ]
 }
 ```
 

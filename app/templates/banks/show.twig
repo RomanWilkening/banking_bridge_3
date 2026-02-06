@@ -9,8 +9,20 @@
                 <span class="inline-flex items-center justify-center h-14 w-14 rounded-full bg-primary-100">
                     <span class="text-2xl">🏦</span>
                 </span>
-                <div class="ml-4">
-                    <h3 class="text-lg font-medium text-gray-900">{{ bank.name }}</h3>
+                <div class="ml-4" x-data="editableName('bank', {{ bank.id }}, '{{ bank.name|e('js') }}')">
+                    <div class="flex items-center gap-2">
+                        <h3 x-show="!editing" class="text-lg font-medium text-gray-900" x-text="displayName"></h3>
+                        <input x-show="editing" x-model="editName" @keyup.enter="save" @keyup.escape="cancel"
+                               x-ref="nameInput" type="text"
+                               class="text-lg font-medium text-gray-900 border-b border-primary-500 focus:outline-none bg-transparent">
+                        <button x-show="!editing" @click="edit" class="text-gray-400 hover:text-primary-500" title="Umbenennen">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/>
+                            </svg>
+                        </button>
+                        <button x-show="editing" @click="save" class="text-green-500 hover:text-green-600" title="Speichern">✓</button>
+                        <button x-show="editing" @click="cancel" class="text-red-500 hover:text-red-600" title="Abbrechen">✕</button>
+                    </div>
                     <p class="text-sm text-gray-500">BLZ: {{ bank.bank_code }}</p>
                 </div>
             </div>
@@ -296,22 +308,44 @@
         {% if regular_accounts|length > 0 %}
         <ul role="list" class="divide-y divide-gray-200">
             {% for account in regular_accounts %}
-            <li class="hover:bg-gray-50">
+            <li class="hover:bg-gray-50" x-data="accountItem({{ account.id }}, '{{ (account.custom_name ?? account.account_name ?? 'Konto')|e('js') }}', {{ account.linked_depot_id ?? 'null' }})">
                 <div class="flex items-center px-4 py-4 sm:px-6">
-                    <a href="/accounts/{{ account.id }}" class="flex-1 flex items-center">
-                        <div class="flex-shrink-0">
-                            <span class="inline-flex items-center justify-center h-10 w-10 rounded-full bg-blue-100">
-                                <span class="text-lg">💳</span>
-                            </span>
-                        </div>
-                        <div class="ml-4">
-                            <p class="text-sm font-medium text-gray-900">{{ account.account_name ?? 'Konto' }}</p>
-                            <p class="text-sm text-gray-500">{{ account.iban }}</p>
-                            {% if account.owner_name %}
-                            <p class="text-xs text-gray-400">{{ account.owner_name }}</p>
-                            {% endif %}
-                        </div>
+                    <a href="/accounts/{{ account.id }}" class="flex-shrink-0">
+                        <span class="inline-flex items-center justify-center h-10 w-10 rounded-full bg-blue-100">
+                            <span class="text-lg">💳</span>
+                        </span>
                     </a>
+                    <div class="ml-4 flex-1 min-w-0">
+                        <div class="flex items-center gap-2">
+                            <a x-show="!editing" href="/accounts/{{ account.id }}" class="text-sm font-medium text-gray-900 hover:text-primary-600" x-text="displayName"></a>
+                            <input x-show="editing" x-model="editName" @keyup.enter="saveName" @keyup.escape="cancelEdit"
+                                   x-ref="nameInput" type="text"
+                                   class="text-sm font-medium text-gray-900 border-b border-primary-500 focus:outline-none bg-transparent w-48">
+                            <button x-show="!editing" @click.prevent="startEdit" class="text-gray-400 hover:text-primary-500" title="Umbenennen">
+                                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/>
+                                </svg>
+                            </button>
+                            <button x-show="editing" @click="saveName" class="text-green-500 hover:text-green-600 text-sm">✓</button>
+                            <button x-show="editing" @click="cancelEdit" class="text-red-500 hover:text-red-600 text-sm">✕</button>
+                        </div>
+                        <p class="text-sm text-gray-500 truncate">{{ account.iban }}</p>
+                        {% if account.owner_name %}
+                        <p class="text-xs text-gray-400">{{ account.owner_name }}</p>
+                        {% endif %}
+                        <!-- Depot Link -->
+                        <div class="mt-1 flex items-center gap-2 text-xs">
+                            <span class="text-gray-400">Depot:</span>
+                            <select x-model="linkedDepotId" @change="linkDepot" 
+                                    class="text-xs border-gray-200 rounded py-0.5 pr-6 focus:ring-primary-500 focus:border-primary-500">
+                                <option value="">— Nicht verknüpft —</option>
+                                {% for depot in depots %}
+                                <option value="{{ depot.id }}">{{ depot.custom_name ?? depot.account_name }} ({{ bank.name }})</option>
+                                {% endfor %}
+                            </select>
+                            <span x-show="linkingDepot" class="text-gray-400">...</span>
+                        </div>
+                    </div>
                     <div class="flex items-center">
                         <div class="text-right mr-4">
                             {% if account.balance is not null %}
@@ -368,19 +402,29 @@
         
         <ul role="list" class="divide-y divide-gray-200">
             {% for depot in depots %}
-            <li class="hover:bg-gray-50">
+            <li class="hover:bg-gray-50" x-data="accountItem({{ depot.id }}, '{{ (depot.custom_name ?? depot.account_name ?? 'Depot')|e('js') }}', null)">
                 <div class="flex items-center px-4 py-4 sm:px-6">
-                    <a href="/accounts/{{ depot.id }}" class="flex-1 flex items-center">
-                        <div class="flex-shrink-0">
-                            <span class="inline-flex items-center justify-center h-10 w-10 rounded-full bg-purple-100">
-                                <span class="text-lg">📊</span>
-                            </span>
-                        </div>
-                        <div class="ml-4">
-                            <p class="text-sm font-medium text-gray-900">{{ depot.account_name ?? 'Depot' }}</p>
-                            <p class="text-sm text-gray-500">Depot {{ depot.account_number }}{% if depot.sub_account %} / {{ depot.sub_account }}{% endif %}</p>
-                        </div>
+                    <a href="/accounts/{{ depot.id }}" class="flex-shrink-0">
+                        <span class="inline-flex items-center justify-center h-10 w-10 rounded-full bg-purple-100">
+                            <span class="text-lg">📊</span>
+                        </span>
                     </a>
+                    <div class="ml-4 flex-1 min-w-0">
+                        <div class="flex items-center gap-2">
+                            <a x-show="!editing" href="/accounts/{{ depot.id }}" class="text-sm font-medium text-gray-900 hover:text-primary-600" x-text="displayName"></a>
+                            <input x-show="editing" x-model="editName" @keyup.enter="saveName" @keyup.escape="cancelEdit"
+                                   x-ref="nameInput" type="text"
+                                   class="text-sm font-medium text-gray-900 border-b border-primary-500 focus:outline-none bg-transparent w-48">
+                            <button x-show="!editing" @click.prevent="startEdit" class="text-gray-400 hover:text-primary-500" title="Umbenennen">
+                                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/>
+                                </svg>
+                            </button>
+                            <button x-show="editing" @click="saveName" class="text-green-500 hover:text-green-600 text-sm">✓</button>
+                            <button x-show="editing" @click="cancelEdit" class="text-red-500 hover:text-red-600 text-sm">✕</button>
+                        </div>
+                        <p class="text-sm text-gray-500">Depot {{ depot.account_number }}{% if depot.sub_account %} / {{ depot.sub_account }}{% endif %}</p>
+                    </div>
                     <div class="flex items-center">
                         <div class="text-right mr-4">
                             {% if depot.balance is not null %}
@@ -490,6 +534,125 @@
 
 {% block scripts %}
 <script>
+function editableName(type, id, initialName) {
+    return {
+        type: type,
+        id: id,
+        displayName: initialName,
+        editName: initialName,
+        editing: false,
+        
+        edit() {
+            this.editName = this.displayName;
+            this.editing = true;
+            this.$nextTick(() => this.$refs.nameInput.focus());
+        },
+        
+        async save() {
+            if (!this.editName.trim()) {
+                this.cancel();
+                return;
+            }
+            
+            const url = this.type === 'bank' 
+                ? `/api/banks/${this.id}` 
+                : `/api/accounts/${this.id}`;
+            
+            try {
+                const response = await fetch(url, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name: this.editName.trim() })
+                });
+                const data = await response.json();
+                
+                if (data.success) {
+                    this.displayName = this.editName.trim();
+                    this.editing = false;
+                } else {
+                    alert(data.message || 'Fehler beim Speichern');
+                }
+            } catch (error) {
+                alert('Netzwerkfehler: ' + error.message);
+            }
+        },
+        
+        cancel() {
+            this.editName = this.displayName;
+            this.editing = false;
+        }
+    };
+}
+
+function accountItem(accountId, initialName, initialLinkedDepotId) {
+    return {
+        accountId: accountId,
+        displayName: initialName,
+        editName: initialName,
+        editing: false,
+        linkedDepotId: initialLinkedDepotId ? String(initialLinkedDepotId) : '',
+        linkingDepot: false,
+        
+        startEdit() {
+            this.editName = this.displayName;
+            this.editing = true;
+            this.$nextTick(() => this.$refs.nameInput.focus());
+        },
+        
+        async saveName() {
+            if (!this.editName.trim()) {
+                this.cancelEdit();
+                return;
+            }
+            
+            try {
+                const response = await fetch(`/api/accounts/${this.accountId}`, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name: this.editName.trim() })
+                });
+                const data = await response.json();
+                
+                if (data.success) {
+                    this.displayName = this.editName.trim();
+                    this.editing = false;
+                } else {
+                    alert(data.message || 'Fehler beim Speichern');
+                }
+            } catch (error) {
+                alert('Netzwerkfehler: ' + error.message);
+            }
+        },
+        
+        cancelEdit() {
+            this.editName = this.displayName;
+            this.editing = false;
+        },
+        
+        async linkDepot() {
+            this.linkingDepot = true;
+            
+            try {
+                const depotId = this.linkedDepotId ? parseInt(this.linkedDepotId) : null;
+                const response = await fetch(`/api/accounts/${this.accountId}/link-depot`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ depot_id: depotId })
+                });
+                const data = await response.json();
+                
+                if (!data.success) {
+                    alert(data.message || 'Fehler beim Verknüpfen');
+                }
+            } catch (error) {
+                alert('Netzwerkfehler: ' + error.message);
+            }
+            
+            this.linkingDepot = false;
+        }
+    };
+}
+
 function mqttToggle(accountId, initialValue) {
     return {
         accountId: accountId,
