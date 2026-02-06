@@ -179,6 +179,50 @@
                     </p>
                 </div>
 
+                <!-- Auto-Publish Settings -->
+                <div class="border-t border-gray-200 pt-6 mt-6">
+                    <h4 class="text-md font-medium text-gray-900 mb-4">Automatische Updates</h4>
+                    
+                    <div class="flex items-center justify-between mb-4">
+                        <div class="flex items-center">
+                            <input type="checkbox" name="mqtt_auto_publish_enabled" id="mqtt_auto_publish_enabled"
+                                   class="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                                   {{ settings.mqtt_auto_publish_enabled == '1' ? 'checked' : '' }}
+                                   x-model="autoPublishEnabled">
+                            <label for="mqtt_auto_publish_enabled" class="ml-3 block text-sm font-medium text-gray-700">
+                                Automatisch MQTT-Updates senden
+                            </label>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <span class="text-sm" :class="autoPublishEnabled ? 'text-green-600' : 'text-gray-500'" x-text="autoPublishEnabled ? 'Aktiv' : 'Inaktiv'"></span>
+                            <span x-show="autoPublishEnabled" class="flex h-2 w-2 relative">
+                                <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+                                <span class="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
+                            </span>
+                        </div>
+                    </div>
+                    
+                    <div class="mb-4">
+                        <label for="mqtt_auto_publish_interval" class="block text-sm font-medium text-gray-700">Update-Intervall</label>
+                        <select name="mqtt_auto_publish_interval" id="mqtt_auto_publish_interval"
+                                class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm border px-3 py-2">
+                            <option value="1" {{ settings.mqtt_auto_publish_interval == '1' or settings.mqtt_auto_publish_interval == '' ? 'selected' : '' }}>Jede Minute</option>
+                            <option value="5" {{ settings.mqtt_auto_publish_interval == '5' ? 'selected' : '' }}>Alle 5 Minuten</option>
+                            <option value="10" {{ settings.mqtt_auto_publish_interval == '10' ? 'selected' : '' }}>Alle 10 Minuten</option>
+                            <option value="15" {{ settings.mqtt_auto_publish_interval == '15' ? 'selected' : '' }}>Alle 15 Minuten</option>
+                            <option value="30" {{ settings.mqtt_auto_publish_interval == '30' ? 'selected' : '' }}>Alle 30 Minuten</option>
+                            <option value="60" {{ settings.mqtt_auto_publish_interval == '60' ? 'selected' : '' }}>Stündlich</option>
+                        </select>
+                        <p class="mt-1 text-sm text-gray-500">
+                            Sendet automatisch die aktuellen Kontostände an den MQTT-Broker.
+                        </p>
+                    </div>
+
+                    <div x-show="lastPublish" class="text-sm text-gray-500 mb-4">
+                        Letzte MQTT-Übertragung: <span x-text="lastPublish"></span>
+                    </div>
+                </div>
+
                 <div class="flex items-center gap-4 pt-2">
                     <button type="button" @click="testConnection" :disabled="testing"
                             class="inline-flex items-center rounded-md bg-gray-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-gray-500 disabled:opacity-50">
@@ -260,6 +304,8 @@ function autoSyncSettings() {
 function mqttSettings() {
     return {
         enabled: {{ settings.mqtt_enabled == '1' ? 'true' : 'false' }},
+        autoPublishEnabled: {{ settings.mqtt_auto_publish_enabled == '1' ? 'true' : 'false' }},
+        lastPublish: '{{ settings.mqtt_last_publish ?? "" }}',
         testing: false,
         publishing: false,
         mqttMessage: '',

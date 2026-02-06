@@ -189,19 +189,20 @@ class MqttService
                 'count' => count($accounts),
                 'accounts' => array_map(fn($a) => [
                     'id' => $a['id'],
-                    'name' => $a['account_name'] ?? 'unknown',
+                    'name' => $a['custom_name'] ?? $a['account_name'] ?? 'unknown',
                     'bank' => $a['bank_name'] ?? 'unknown',
                     'balance' => $a['balance'] ?? null
                 ], $accounts)
             ]);
             
             foreach ($accounts as $account) {
+                $displayName = $account['custom_name'] ?? $account['account_name'] ?? 'Konto';
                 try {
                     $result = $this->publishAccountBalance($account, $topicPrefix);
                     $published++;
                     $details[] = [
                         'account_id' => $account['id'],
-                        'name' => $account['account_name'],
+                        'name' => $displayName,
                         'bank' => $account['bank_name'],
                         'topic' => $result['topic'],
                         'balance' => $result['balance'],
@@ -209,10 +210,10 @@ class MqttService
                     ];
                 } catch (\Throwable $e) {
                     $errorMsg = $e->getMessage();
-                    $errors[] = ($account['account_name'] ?? 'Konto ' . $account['id']) . ': ' . $errorMsg;
+                    $errors[] = $displayName . ': ' . $errorMsg;
                     $details[] = [
                         'account_id' => $account['id'],
-                        'name' => $account['account_name'] ?? 'unknown',
+                        'name' => $displayName,
                         'bank' => $account['bank_name'] ?? 'unknown',
                         'status' => 'error',
                         'error' => $errorMsg
@@ -265,7 +266,8 @@ class MqttService
     private function publishAccountBalance(array $account, string $topicPrefix): array
     {
         $accountId = $account['id'];
-        $accountName = $account['account_name'] ?? 'Konto';
+        // Use custom_name if set, otherwise fall back to account_name
+        $accountName = $account['custom_name'] ?? $account['account_name'] ?? 'Konto';
         $bankName = $account['bank_name'] ?? 'Bank';
         $accountType = $account['account_type'] ?? 'checking';
         $balance = $account['balance'];
@@ -275,6 +277,7 @@ class MqttService
         $this->logger->debug('Publishing account', [
             'account_id' => $accountId,
             'account_name' => $accountName,
+            'custom_name' => $account['custom_name'] ?? null,
             'bank_name' => $bankName,
             'balance' => $balance,
             'balance_type' => gettype($balance)
