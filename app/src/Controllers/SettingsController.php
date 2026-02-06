@@ -26,6 +26,9 @@ class SettingsController
             'mqtt_user' => $this->db->getSetting('mqtt_user', ''),
             'mqtt_password' => $this->db->getSetting('mqtt_password', ''),
             'mqtt_topic_prefix' => $this->db->getSetting('mqtt_topic_prefix', 'banking'),
+            'mqtt_auto_publish_enabled' => $this->db->getSetting('mqtt_auto_publish_enabled', '1'),
+            'mqtt_auto_publish_interval' => $this->db->getSetting('mqtt_auto_publish_interval', '1'),
+            'mqtt_last_publish' => $this->db->getSetting('mqtt_last_publish', ''),
             'auto_sync_enabled' => $this->db->getSetting('auto_sync_enabled', '0'),
             'auto_sync_interval' => $this->db->getSetting('auto_sync_interval', '30'),
             'auto_sync_last_run' => $this->db->getSetting('auto_sync_last_run', ''),
@@ -63,6 +66,10 @@ class SettingsController
         }
         if (isset($data['mqtt_topic_prefix'])) {
             $this->db->setSetting('mqtt_topic_prefix', trim($data['mqtt_topic_prefix']));
+        }
+        $this->db->setSetting('mqtt_auto_publish_enabled', isset($data['mqtt_auto_publish_enabled']) ? '1' : '0');
+        if (isset($data['mqtt_auto_publish_interval'])) {
+            $this->db->setSetting('mqtt_auto_publish_interval', trim($data['mqtt_auto_publish_interval']));
         }
 
         // Save Auto-sync settings
