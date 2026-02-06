@@ -208,6 +208,16 @@ class DatabaseService
         if (!in_array('mqtt_export', $columnNames)) {
             $this->pdo->exec("ALTER TABLE accounts ADD COLUMN mqtt_export INTEGER DEFAULT 0");
         }
+        
+        // Add linked_depot_id for linking accounts to depots
+        if (!in_array('linked_depot_id', $columnNames)) {
+            $this->pdo->exec("ALTER TABLE accounts ADD COLUMN linked_depot_id INTEGER REFERENCES accounts(id)");
+        }
+        
+        // Add custom_name for user-defined names
+        if (!in_array('custom_name', $columnNames)) {
+            $this->pdo->exec("ALTER TABLE accounts ADD COLUMN custom_name TEXT");
+        }
     }
 
     public function getPdo(): PDO
@@ -828,6 +838,78 @@ class DatabaseService
         return $result ?: null;
     }
     
+    // Rename Methods
+    
+    /**
+     * Rename a bank
+     */
+    public function renameBank(int $bankId, string $newName): bool
+    {
+        $stmt = $this->pdo->prepare("UPDATE banks SET name = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?");
+        return $stmt->execute([trim($newName), $bankId]);
+    }
+    
+    /**
+     * Rename an account (sets custom_name)
+     */
+    public function renameAccount(int $accountId, ?string $customName): bool
+    {
+        $stmt = $this->pdo->prepare("UPDATE accounts SET custom_name = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?");
+        return $stmt->execute([$customName ? trim($customName) : null, $accountId]);
+    }
+    
+    /**
+     * Get display name for account (custom_name or account_name)
+     */
+    public function getAccountDisplayName(array $account): string
+    {
+        return $account['custom_name'] ?? $account['account_name'] ?? 'Konto';
+    }
+    
+    // Depot Linking Methods
+    
+    /**
+     * Link an account to a depot
+     */
+    public function linkAccountToDepot(int $accountId, ?int $depotId): bool
+    {
+        $stmt = $this->pdo->prepare("UPDATE accounts SET linked_depot_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?");
+        return $stmt->execute([$depotId, $accountId]);
+    }
+    
+    /**
+     * Get accounts linked to a depot
+     */
+    public function getLinkedAccounts(int $depotId): array
+    {
+        $stmt = $this->pdo->prepare("
+            SELECT a.*, b.name as bank_name
+            FROM accounts a
+            JOIN banks b ON a.bank_id = b.id
+            WHERE a.linked_depot_id = ?
+            ORDER BY COALESCE(a.custom_name, a.account_name)
+        ");
+        $stmt->execute([$depotId]);
+        return $stmt->fetchAll();
+    }
+    
+    /**
+     * Get all depots for linking dropdown (excluding the account itself)
+     */
+    public function getDepotsForLinking(int $excludeAccountId): array
+    {
+        $stmt = $this->pdo->prepare("
+            SELECT a.id, COALESCE(a.custom_name, a.account_name) as name, 
+                   a.account_number, a.sub_account, b.name as bank_name
+            FROM accounts a
+            JOIN banks b ON a.bank_id = b.id
+            WHERE a.account_type = 'depot' AND a.id != ?
+            ORDER BY b.name, COALESCE(a.custom_name, a.account_name)
+        ");
+        $stmt->execute([$excludeAccountId]);
+        return $stmt->fetchAll();
+    }
+    
     // Depot API Methods
     
     /**
@@ -836,13 +918,39 @@ class DatabaseService
     public function getAllDepots(): array
     {
         $stmt = $this->pdo->query("
-            SELECT a.*, b.name as bank_name, b.bank_code
+            SELECT a.*, b.name as bank_name, b.bank_code,
+                   COALESCE(a.custom_name, a.account_name) as display_name
             FROM accounts a
             JOIN banks b ON a.bank_id = b.id
             WHERE a.account_type = 'depot'
-            ORDER BY b.name, a.account_name
+            ORDER BY b.name, COALESCE(a.custom_name, a.account_name)
         ");
         return $stmt->fetchAll();
+    }
+    
+    /**
+     * Get depot total value including linked accounts
+     */
+    public function getDepotTotalValueWithLinked(int $depotId): array
+    {
+        // Get securities value
+        $securitiesValue = $this->getDepotTotalValue($depotId) ?? 0;
+        
+        // Get linked accounts value
+        $linkedAccounts = $this->getLinkedAccounts($depotId);
+        $linkedValue = 0;
+        foreach ($linkedAccounts as $account) {
+            if ($account['balance'] !== null) {
+                $linkedValue += (float) $account['balance'];
+            }
+        }
+        
+        return [
+            'securities_value' => $securitiesValue,
+            'linked_accounts_value' => $linkedValue,
+            'total_value' => $securitiesValue + $linkedValue,
+            'linked_accounts_count' => count($linkedAccounts)
+        ];
     }
     
     /**

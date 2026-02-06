@@ -90,11 +90,15 @@ class BankController
         }
 
         $accounts = $this->db->getAccountsByBankId($bankId);
+        
+        // Get all depots for linking dropdown
+        $depots = $this->db->getAllDepots();
 
         return $this->view->render($response, 'banks/show.twig', [
             'title' => $bank['name'],
             'bank' => $bank,
-            'accounts' => $accounts
+            'accounts' => $accounts,
+            'depots' => $depots
         ]);
     }
 

@@ -1269,6 +1269,141 @@ class ApiController
     }
     
     // =====================================
+    // Rename & Link API
+    // =====================================
+    
+    /**
+     * Update bank (rename)
+     * PATCH /api/banks/{id}
+     */
+    public function updateBank(Request $request, Response $response, array $args): Response
+    {
+        $bankId = (int) $args['id'];
+        $bank = $this->db->getBankById($bankId);
+        
+        if (!$bank) {
+            return $this->jsonResponse($response, [
+                'success' => false,
+                'message' => 'Bank nicht gefunden'
+            ], 404);
+        }
+        
+        $data = $request->getParsedBody() ?? [];
+        
+        if (isset($data['name']) && !empty(trim($data['name']))) {
+            $this->db->renameBank($bankId, $data['name']);
+        }
+        
+        return $this->jsonResponse($response, [
+            'success' => true,
+            'message' => 'Bank aktualisiert'
+        ]);
+    }
+    
+    /**
+     * Update account (rename, link to depot)
+     * PATCH /api/accounts/{id}
+     */
+    public function updateAccount(Request $request, Response $response, array $args): Response
+    {
+        $accountId = (int) $args['id'];
+        $account = $this->db->getAccountById($accountId);
+        
+        if (!$account) {
+            return $this->jsonResponse($response, [
+                'success' => false,
+                'message' => 'Konto nicht gefunden'
+            ], 404);
+        }
+        
+        $data = $request->getParsedBody() ?? [];
+        
+        // Rename
+        if (array_key_exists('name', $data)) {
+            $newName = !empty(trim($data['name'])) ? trim($data['name']) : null;
+            $this->db->renameAccount($accountId, $newName);
+        }
+        
+        return $this->jsonResponse($response, [
+            'success' => true,
+            'message' => 'Konto aktualisiert'
+        ]);
+    }
+    
+    /**
+     * Link account to depot
+     * POST /api/accounts/{id}/link-depot
+     */
+    public function linkAccountToDepot(Request $request, Response $response, array $args): Response
+    {
+        $accountId = (int) $args['id'];
+        $account = $this->db->getAccountById($accountId);
+        
+        if (!$account) {
+            return $this->jsonResponse($response, [
+                'success' => false,
+                'message' => 'Konto nicht gefunden'
+            ], 404);
+        }
+        
+        // Depots cannot be linked to other depots
+        if ($account['account_type'] === 'depot') {
+            return $this->jsonResponse($response, [
+                'success' => false,
+                'message' => 'Depots können nicht verknüpft werden'
+            ], 400);
+        }
+        
+        $data = $request->getParsedBody() ?? [];
+        $depotId = isset($data['depot_id']) ? (int) $data['depot_id'] : null;
+        
+        // Validate depot exists if linking
+        if ($depotId !== null && $depotId !== 0) {
+            $depot = $this->db->getAccountById($depotId);
+            if (!$depot || $depot['account_type'] !== 'depot') {
+                return $this->jsonResponse($response, [
+                    'success' => false,
+                    'message' => 'Depot nicht gefunden'
+                ], 404);
+            }
+        } else {
+            $depotId = null; // Unlink
+        }
+        
+        $this->db->linkAccountToDepot($accountId, $depotId);
+        
+        return $this->jsonResponse($response, [
+            'success' => true,
+            'message' => $depotId ? 'Konto mit Depot verknüpft' : 'Verknüpfung aufgehoben',
+            'linked_depot_id' => $depotId
+        ]);
+    }
+    
+    /**
+     * Get depots available for linking
+     * GET /api/depots-for-linking
+     */
+    public function getDepotsForLinking(Request $request, Response $response): Response
+    {
+        $params = $request->getQueryParams();
+        $excludeId = isset($params['exclude']) ? (int) $params['exclude'] : 0;
+        
+        $depots = $this->db->getDepotsForLinking($excludeId);
+        
+        return $this->jsonResponse($response, [
+            'success' => true,
+            'depots' => array_map(fn($d) => [
+                'id' => (int) $d['id'],
+                'name' => $d['name'],
+                'account_number' => $d['account_number'],
+                'sub_account' => $d['sub_account'],
+                'bank' => $d['bank_name'],
+                'label' => $d['name'] . ' (' . $d['bank_name'] . ')'
+            ], $depots)
+        ]);
+    }
+    
+    // =====================================
     // Public Depot API (v1)
     // =====================================
     
@@ -1284,14 +1419,18 @@ class ApiController
             'success' => true,
             'count' => count($depots),
             'depots' => array_map(function($d) {
+                $totals = $this->db->getDepotTotalValueWithLinked((int) $d['id']);
                 return [
                     'id' => (int) $d['id'],
-                    'name' => $d['account_name'],
+                    'name' => $d['display_name'] ?? $d['account_name'],
                     'account_number' => $d['account_number'],
                     'sub_account' => $d['sub_account'],
                     'bank' => $d['bank_name'],
                     'bank_code' => $d['bank_code'],
-                    'total_value' => $d['balance'] !== null ? round((float) $d['balance'], 2) : null,
+                    'securities_value' => round($totals['securities_value'], 2),
+                    'linked_accounts_value' => round($totals['linked_accounts_value'], 2),
+                    'total_value' => round($totals['total_value'], 2),
+                    'linked_accounts_count' => $totals['linked_accounts_count'],
                     'currency' => $d['currency'] ?? 'EUR',
                     'last_update' => $d['balance_date'],
                 ];
@@ -1316,21 +1455,25 @@ class ApiController
         }
         
         $holdings = $this->db->getSecuritiesHoldings($depotId);
-        $totalValue = $this->db->getDepotTotalValue($depotId);
+        $linkedAccounts = $this->db->getLinkedAccounts($depotId);
+        $totals = $this->db->getDepotTotalValueWithLinked($depotId);
         
         return $this->jsonResponse($response, [
             'success' => true,
             'depot' => [
                 'id' => (int) $depot['id'],
-                'name' => $depot['account_name'],
+                'name' => $depot['custom_name'] ?? $depot['account_name'],
                 'account_number' => $depot['account_number'],
                 'sub_account' => $depot['sub_account'],
                 'bank' => $depot['bank_name'],
                 'bank_code' => $depot['bank_code'],
-                'total_value' => $totalValue !== null ? round($totalValue, 2) : null,
+                'securities_value' => round($totals['securities_value'], 2),
+                'linked_accounts_value' => round($totals['linked_accounts_value'], 2),
+                'total_value' => round($totals['total_value'], 2),
                 'currency' => $depot['currency'] ?? 'EUR',
                 'last_update' => $depot['balance_date'],
                 'holdings_count' => count($holdings),
+                'linked_accounts_count' => count($linkedAccounts),
             ]
         ]);
     }
@@ -1352,31 +1495,72 @@ class ApiController
         }
         
         $holdings = $this->db->getSecuritiesHoldings($depotId);
+        $linkedAccounts = $this->db->getLinkedAccounts($depotId);
+        $totals = $this->db->getDepotTotalValueWithLinked($depotId);
+        
+        // Format securities holdings
+        $formattedHoldings = array_map(function($h) {
+            return [
+                'type' => 'security',
+                'isin' => $h['isin'],
+                'wkn' => $h['wkn'],
+                'name' => $h['name'],
+                'quantity' => (float) $h['quantity'],
+                'currency' => $h['currency'] ?? 'EUR',
+                'current_price' => $h['current_price'] !== null ? round((float) $h['current_price'], 4) : null,
+                'purchase_price' => $h['purchase_price'] !== null ? round((float) $h['purchase_price'], 4) : null,
+                'total_value' => $h['total_value'] !== null ? round((float) $h['total_value'], 2) : null,
+                'profit_loss' => $h['profit_loss'] !== null ? round((float) $h['profit_loss'], 2) : null,
+                'profit_loss_percent' => $h['profit_loss_percent'] !== null ? round((float) $h['profit_loss_percent'], 2) : null,
+                'price_date' => $h['price_date'],
+                'updated_at' => $h['updated_at'],
+            ];
+        }, $holdings);
+        
+        // Add linked accounts as "cash" positions
+        $linkedPositions = array_map(function($a) {
+            $displayName = $a['custom_name'] ?? $a['account_name'] ?? 'Konto';
+            return [
+                'type' => 'cash',
+                'isin' => null,
+                'wkn' => null,
+                'name' => $displayName . ' (' . $a['bank_name'] . ')',
+                'quantity' => 1,
+                'currency' => $a['currency'] ?? 'EUR',
+                'current_price' => $a['balance'] !== null ? round((float) $a['balance'], 2) : null,
+                'purchase_price' => null,
+                'total_value' => $a['balance'] !== null ? round((float) $a['balance'], 2) : null,
+                'profit_loss' => null,
+                'profit_loss_percent' => null,
+                'price_date' => $a['balance_date'],
+                'updated_at' => $a['updated_at'],
+                'linked_account' => [
+                    'id' => (int) $a['id'],
+                    'iban' => $a['iban'],
+                    'account_type' => $a['account_type'],
+                ]
+            ];
+        }, $linkedAccounts);
+        
+        // Combine all positions
+        $allPositions = array_merge($formattedHoldings, $linkedPositions);
         
         return $this->jsonResponse($response, [
             'success' => true,
             'depot' => [
                 'id' => (int) $depot['id'],
-                'name' => $depot['account_name'],
+                'name' => $depot['custom_name'] ?? $depot['account_name'],
                 'bank' => $depot['bank_name'],
             ],
-            'count' => count($holdings),
-            'holdings' => array_map(function($h) {
-                return [
-                    'isin' => $h['isin'],
-                    'wkn' => $h['wkn'],
-                    'name' => $h['name'],
-                    'quantity' => (float) $h['quantity'],
-                    'currency' => $h['currency'] ?? 'EUR',
-                    'current_price' => $h['current_price'] !== null ? round((float) $h['current_price'], 4) : null,
-                    'purchase_price' => $h['purchase_price'] !== null ? round((float) $h['purchase_price'], 4) : null,
-                    'total_value' => $h['total_value'] !== null ? round((float) $h['total_value'], 2) : null,
-                    'profit_loss' => $h['profit_loss'] !== null ? round((float) $h['profit_loss'], 2) : null,
-                    'profit_loss_percent' => $h['profit_loss_percent'] !== null ? round((float) $h['profit_loss_percent'], 2) : null,
-                    'price_date' => $h['price_date'],
-                    'updated_at' => $h['updated_at'],
-                ];
-            }, $holdings)
+            'summary' => [
+                'securities_value' => round($totals['securities_value'], 2),
+                'linked_accounts_value' => round($totals['linked_accounts_value'], 2),
+                'total_value' => round($totals['total_value'], 2),
+                'securities_count' => count($holdings),
+                'linked_accounts_count' => count($linkedAccounts),
+            ],
+            'count' => count($allPositions),
+            'holdings' => $allPositions
         ]);
     }
     

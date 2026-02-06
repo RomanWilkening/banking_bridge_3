@@ -52,4 +52,10 @@ return function (App $app) {
     $app->get('/api/v1/depots/{id}', [ApiController::class, 'getDepot'])->setName('api.v1.depot');
     $app->get('/api/v1/depots/{id}/holdings', [ApiController::class, 'listDepotHoldings'])->setName('api.v1.depot.holdings');
     $app->get('/api/v1/holdings', [ApiController::class, 'listAllHoldings'])->setName('api.v1.holdings');
+    
+    // Rename & Link API
+    $app->patch('/api/banks/{id}', [ApiController::class, 'updateBank'])->setName('api.banks.update');
+    $app->patch('/api/accounts/{id}', [ApiController::class, 'updateAccount'])->setName('api.accounts.update');
+    $app->post('/api/accounts/{id}/link-depot', [ApiController::class, 'linkAccountToDepot'])->setName('api.accounts.linkDepot');
+    $app->get('/api/depots-for-linking', [ApiController::class, 'getDepotsForLinking'])->setName('api.depotsForLinking');
 };

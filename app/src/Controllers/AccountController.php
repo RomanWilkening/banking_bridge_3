@@ -34,7 +34,8 @@ class AccountController
         if ($isDepot) {
             // For depots, show holdings
             $holdings = $this->db->getSecuritiesHoldings($accountId);
-            $totalValue = $this->db->getDepotTotalValue($accountId);
+            $linkedAccounts = $this->db->getLinkedAccounts($accountId);
+            $totals = $this->db->getDepotTotalValueWithLinked($accountId);
             
             // Calculate totals
             $totalProfitLoss = 0;
@@ -42,14 +43,21 @@ class AccountController
                 $totalProfitLoss += $holding['profit_loss'] ?? 0;
             }
             
+            // Get display name
+            $displayName = $account['custom_name'] ?? $account['account_name'] ?? 'Depot';
+            
             return $this->view->render($response, 'accounts/depot.twig', [
-                'title' => $account['account_name'] ?? 'Depot',
+                'title' => $displayName,
                 'account' => $account,
                 'bank' => $bank,
                 'holdings' => $holdings,
-                'total_value' => $totalValue,
+                'linked_accounts' => $linkedAccounts,
+                'total_value' => $totals['total_value'],
+                'securities_value' => $totals['securities_value'],
+                'linked_accounts_value' => $totals['linked_accounts_value'],
                 'total_profit_loss' => $totalProfitLoss,
-                'holdings_count' => count($holdings)
+                'holdings_count' => count($holdings),
+                'linked_accounts_count' => count($linkedAccounts)
             ]);
         }
         
