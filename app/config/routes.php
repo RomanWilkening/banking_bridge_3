@@ -44,5 +44,6 @@ return function (App $app) {
     // MQTT API
     $app->post('/api/mqtt/test', [ApiController::class, 'testMqtt'])->setName('api.mqtt.test');
     $app->post('/api/mqtt/publish', [ApiController::class, 'publishMqtt'])->setName('api.mqtt.publish');
+    $app->get('/api/mqtt/accounts', [ApiController::class, 'getMqttAccounts'])->setName('api.mqtt.accounts');
     $app->post('/api/accounts/{id}/mqtt-export', [ApiController::class, 'setAccountMqttExport'])->setName('api.accounts.mqttExport');
 };

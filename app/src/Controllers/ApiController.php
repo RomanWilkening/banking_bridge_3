@@ -1289,6 +1289,36 @@ class ApiController
     }
     
     /**
+     * Get all MQTT-enabled accounts with their data (for debugging)
+     */
+    public function getMqttAccounts(Request $request, Response $response): Response
+    {
+        $accounts = $this->db->getMqttEnabledAccounts();
+        
+        return $this->jsonResponse($response, [
+            'success' => true,
+            'count' => count($accounts),
+            'accounts' => array_map(function($a) {
+                return [
+                    'id' => $a['id'],
+                    'bank_id' => $a['bank_id'],
+                    'bank_name' => $a['bank_name'] ?? null,
+                    'account_name' => $a['account_name'] ?? null,
+                    'account_type' => $a['account_type'] ?? null,
+                    'iban' => $a['iban'] ?? null,
+                    'account_number' => $a['account_number'] ?? null,
+                    'balance' => $a['balance'],
+                    'balance_is_null' => $a['balance'] === null,
+                    'balance_type' => gettype($a['balance']),
+                    'currency' => $a['currency'] ?? 'EUR',
+                    'mqtt_export' => $a['mqtt_export'] ?? 0,
+                    'balance_date' => $a['balance_date'] ?? null,
+                ];
+            }, $accounts)
+        ]);
+    }
+    
+    /**
      * Set MQTT export flag for an account
      */
     public function setAccountMqttExport(Request $request, Response $response, array $args): Response
