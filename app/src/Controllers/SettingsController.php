@@ -20,6 +20,7 @@ class SettingsController
     {
         $settings = [
             'fints_product_id' => $this->db->getSetting('fints_product_id', ''),
+            'mqtt_enabled' => $this->db->getSetting('mqtt_enabled', '0'),
             'mqtt_host' => $this->db->getSetting('mqtt_host', ''),
             'mqtt_port' => $this->db->getSetting('mqtt_port', '1883'),
             'mqtt_user' => $this->db->getSetting('mqtt_user', ''),
@@ -47,6 +48,7 @@ class SettingsController
         }
 
         // Save MQTT settings
+        $this->db->setSetting('mqtt_enabled', isset($data['mqtt_enabled']) ? '1' : '0');
         if (isset($data['mqtt_host'])) {
             $this->db->setSetting('mqtt_host', trim($data['mqtt_host']));
         }

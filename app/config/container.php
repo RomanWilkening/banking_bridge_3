@@ -5,6 +5,7 @@ use Psr\Container\ContainerInterface;
 use Slim\Views\Twig;
 use App\Services\DatabaseService;
 use App\Services\FinTSService;
+use App\Services\MqttService;
 use Monolog\Logger;
 use Monolog\Handler\StreamHandler;
 
@@ -46,5 +47,11 @@ return [
         $service->setProductId($db->getSetting('fints_product_id'));
         
         return $service;
+    },
+    
+    MqttService::class => function (ContainerInterface $container) {
+        $logger = $container->get(Logger::class);
+        $db = $container->get(DatabaseService::class);
+        return new MqttService($logger, $db);
     },
 ];

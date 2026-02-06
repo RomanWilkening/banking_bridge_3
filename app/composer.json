@@ -10,7 +10,8 @@
         "php-di/php-di": "^7.0",
         "php-di/slim-bridge": "^3.4",
         "nemiah/php-fints": "^3.1",
-        "monolog/monolog": "^3.5"
+        "monolog/monolog": "^3.5",
+        "php-mqtt/client": "^1.8"
     },
     "autoload": {
         "psr-4": {

@@ -113,15 +113,25 @@
         </div>
 
         <!-- MQTT Settings -->
-        <div class="bg-white shadow rounded-lg mb-6">
+        <div class="bg-white shadow rounded-lg mb-6" x-data="mqttSettings()">
             <div class="px-4 py-5 sm:px-6 border-b border-gray-200">
                 <h3 class="text-lg font-medium leading-6 text-gray-900">MQTT-Einstellungen</h3>
-                <p class="mt-1 text-sm text-gray-500">Konfiguration für Home Assistant Integration (optional)</p>
+                <p class="mt-1 text-sm text-gray-500">Konfiguration für Home Assistant Integration</p>
             </div>
             <div class="px-4 py-5 sm:p-6 space-y-6">
+                <div class="flex items-center">
+                    <input type="checkbox" name="mqtt_enabled" id="mqtt_enabled"
+                           class="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                           {{ settings.mqtt_enabled == '1' ? 'checked' : '' }}
+                           x-model="enabled">
+                    <label for="mqtt_enabled" class="ml-3 block text-sm font-medium text-gray-700">
+                        MQTT-Übertragung aktivieren
+                    </label>
+                </div>
+                
                 <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
                     <div>
-                        <label for="mqtt_host" class="block text-sm font-medium text-gray-700">MQTT Host</label>
+                        <label for="mqtt_host" class="block text-sm font-medium text-gray-700">MQTT Host *</label>
                         <input type="text" name="mqtt_host" id="mqtt_host"
                                class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm border px-3 py-2"
                                placeholder="homeassistant.local"
@@ -158,8 +168,32 @@
                            placeholder="banking"
                            value="{{ settings.mqtt_topic_prefix }}">
                     <p class="mt-1 text-sm text-gray-500">
-                        Topics werden als <code class="bg-gray-100 px-1 rounded">{{ settings.mqtt_topic_prefix ?: 'banking' }}/kontoname/balance</code> veröffentlicht
+                        Topics werden als <code class="bg-gray-100 px-1 rounded">{{ settings.mqtt_topic_prefix ?: 'banking' }}/bankname/kontoname</code> veröffentlicht
                     </p>
+                </div>
+                
+                <div class="bg-blue-50 p-3 rounded-md">
+                    <p class="text-sm text-blue-800">
+                        <strong>Home Assistant Auto-Discovery:</strong> Aktivierte Konten werden automatisch als Sensoren in Home Assistant erkannt. 
+                        Gehen Sie zur jeweiligen Bank, um einzelne Konten für MQTT zu aktivieren.
+                    </p>
+                </div>
+
+                <div class="flex items-center gap-4 pt-2">
+                    <button type="button" @click="testConnection" :disabled="testing"
+                            class="inline-flex items-center rounded-md bg-gray-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-gray-500 disabled:opacity-50">
+                        <span x-show="testing" class="loading-spinner mr-2"></span>
+                        <span x-text="testing ? 'Teste...' : 'Verbindung testen'"></span>
+                    </button>
+                    <button type="button" @click="publishNow" :disabled="publishing"
+                            class="inline-flex items-center rounded-md bg-green-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-green-500 disabled:opacity-50">
+                        <span x-show="publishing" class="loading-spinner mr-2"></span>
+                        <span x-text="publishing ? 'Sende...' : 'Jetzt senden'"></span>
+                    </button>
+                </div>
+
+                <div x-show="mqttMessage" x-cloak class="rounded-md p-3" :class="mqttMessageType === 'success' ? 'bg-green-50' : 'bg-red-50'">
+                    <p class="text-sm" :class="mqttMessageType === 'success' ? 'text-green-800' : 'text-red-800'" x-text="mqttMessage"></p>
                 </div>
             </div>
         </div>
@@ -219,6 +253,58 @@ function autoSyncSettings() {
                 this.status = value ? 'running' : 'stopped';
                 this.statusText = value ? 'Aktiv' : 'Inaktiv';
             });
+        }
+    };
+}
+
+function mqttSettings() {
+    return {
+        enabled: {{ settings.mqtt_enabled == '1' ? 'true' : 'false' }},
+        testing: false,
+        publishing: false,
+        mqttMessage: '',
+        mqttMessageType: 'success',
+
+        async testConnection() {
+            this.testing = true;
+            this.mqttMessage = '';
+
+            try {
+                const response = await fetch('/api/mqtt/test', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                const data = await response.json();
+
+                this.mqttMessage = data.message;
+                this.mqttMessageType = data.success ? 'success' : 'error';
+            } catch (error) {
+                this.mqttMessage = 'Netzwerkfehler: ' + error.message;
+                this.mqttMessageType = 'error';
+            }
+
+            this.testing = false;
+        },
+
+        async publishNow() {
+            this.publishing = true;
+            this.mqttMessage = '';
+
+            try {
+                const response = await fetch('/api/mqtt/publish', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                const data = await response.json();
+
+                this.mqttMessage = data.message;
+                this.mqttMessageType = data.success ? 'success' : 'error';
+            } catch (error) {
+                this.mqttMessage = 'Netzwerkfehler: ' + error.message;
+                this.mqttMessageType = 'error';
+            }
+
+            this.publishing = false;
         }
     };
 }

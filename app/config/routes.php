@@ -40,4 +40,9 @@ return function (App $app) {
     // Auto-sync API
     $app->post('/api/auto-sync/run', [ApiController::class, 'runAutoSync'])->setName('api.autosync.run');
     $app->get('/api/auto-sync/status', [ApiController::class, 'getAutoSyncStatus'])->setName('api.autosync.status');
+    
+    // MQTT API
+    $app->post('/api/mqtt/test', [ApiController::class, 'testMqtt'])->setName('api.mqtt.test');
+    $app->post('/api/mqtt/publish', [ApiController::class, 'publishMqtt'])->setName('api.mqtt.publish');
+    $app->post('/api/accounts/{id}/mqtt-export', [ApiController::class, 'setAccountMqttExport'])->setName('api.accounts.mqttExport');
 };

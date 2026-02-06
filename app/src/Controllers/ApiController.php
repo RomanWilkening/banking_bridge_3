@@ -7,6 +7,7 @@ use Psr\Http\Message\ResponseInterface as Response;
 use Psr\Http\Message\ServerRequestInterface as Request;
 use App\Services\DatabaseService;
 use App\Services\FinTSService;
+use App\Services\MqttService;
 use Monolog\Logger;
 
 class ApiController
@@ -14,6 +15,7 @@ class ApiController
     public function __construct(
         private DatabaseService $db,
         private FinTSService $fintsService,
+        private MqttService $mqttService,
         private Logger $logger
     ) {}
 
@@ -392,6 +394,12 @@ class ApiController
             null,
             $stats
         );
+        
+        // Publish to MQTT if enabled
+        if ($this->mqttService->isEnabled()) {
+            $mqttResult = $this->mqttService->publishAccountBalances();
+            $this->logger->info('MQTT publish after sync', $mqttResult);
+        }
         
         return $this->jsonResponse($response, [
             'success' => true,
@@ -1092,6 +1100,12 @@ class ApiController
         
         $this->logger->info('=== AUTO SYNC COMPLETED ===', $totalStats);
         
+        // Publish to MQTT if enabled
+        if ($this->mqttService->isEnabled()) {
+            $mqttResult = $this->mqttService->publishAccountBalances();
+            $this->logger->info('MQTT publish after auto-sync', $mqttResult);
+        }
+        
         // Create summary message
         $message = sprintf(
             '%d Bank(en) synchronisiert, %d übersprungen. %d Salden, %d neue Transaktionen, %d Wertpapiere.',
@@ -1252,5 +1266,57 @@ class ApiController
         }
         
         return $data;
+    }
+    
+    // MQTT Methods
+    
+    /**
+     * Test MQTT connection
+     */
+    public function testMqtt(Request $request, Response $response): Response
+    {
+        $result = $this->mqttService->testConnection();
+        return $this->jsonResponse($response, $result);
+    }
+    
+    /**
+     * Publish account balances to MQTT
+     */
+    public function publishMqtt(Request $request, Response $response): Response
+    {
+        $result = $this->mqttService->publishAccountBalances();
+        return $this->jsonResponse($response, $result);
+    }
+    
+    /**
+     * Set MQTT export flag for an account
+     */
+    public function setAccountMqttExport(Request $request, Response $response, array $args): Response
+    {
+        $accountId = (int) $args['id'];
+        $account = $this->db->getAccountById($accountId);
+        
+        if (!$account) {
+            return $this->jsonResponse($response, [
+                'success' => false,
+                'message' => 'Konto nicht gefunden'
+            ], 404);
+        }
+        
+        $data = $request->getParsedBody() ?? [];
+        $enabled = !empty($data['enabled']);
+        
+        $this->db->setAccountMqttExport($accountId, $enabled);
+        
+        // If disabling, remove from Home Assistant discovery
+        if (!$enabled) {
+            $this->mqttService->removeAccountDiscovery($accountId);
+        }
+        
+        return $this->jsonResponse($response, [
+            'success' => true,
+            'message' => $enabled ? 'MQTT-Export aktiviert' : 'MQTT-Export deaktiviert',
+            'mqtt_export' => $enabled
+        ]);
     }
 }

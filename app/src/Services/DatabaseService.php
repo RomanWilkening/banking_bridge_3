@@ -203,6 +203,11 @@ class DatabaseService
         if (!in_array('sub_account', $columnNames)) {
             $this->pdo->exec("ALTER TABLE accounts ADD COLUMN sub_account TEXT");
         }
+        
+        // Add mqtt_export column for MQTT publishing
+        if (!in_array('mqtt_export', $columnNames)) {
+            $this->pdo->exec("ALTER TABLE accounts ADD COLUMN mqtt_export INTEGER DEFAULT 0");
+        }
     }
 
     public function getPdo(): PDO
@@ -775,5 +780,51 @@ class DatabaseService
     {
         $stmt = $this->pdo->prepare("DELETE FROM activity_log WHERE bank_id = ?");
         return $stmt->execute([$bankId]);
+    }
+    
+    // MQTT Methods
+    
+    /**
+     * Get all accounts that have MQTT export enabled
+     * Includes bank information for context
+     */
+    public function getMqttEnabledAccounts(): array
+    {
+        $stmt = $this->pdo->query("
+            SELECT a.*, b.name as bank_name, b.bank_code
+            FROM accounts a
+            JOIN banks b ON a.bank_id = b.id
+            WHERE a.mqtt_export = 1
+            ORDER BY b.name, a.account_name
+        ");
+        return $stmt->fetchAll();
+    }
+    
+    /**
+     * Set MQTT export flag for an account
+     */
+    public function setAccountMqttExport(int $accountId, bool $enabled): bool
+    {
+        $stmt = $this->pdo->prepare("
+            UPDATE accounts SET mqtt_export = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+        ");
+        return $stmt->execute([$enabled ? 1 : 0, $accountId]);
+    }
+    
+    /**
+     * Get account with bank information
+     */
+    public function getAccountWithBank(int $accountId): ?array
+    {
+        $stmt = $this->pdo->prepare("
+            SELECT a.*, b.name as bank_name, b.bank_code
+            FROM accounts a
+            JOIN banks b ON a.bank_id = b.id
+            WHERE a.id = ?
+        ");
+        $stmt->execute([$accountId]);
+        $result = $stmt->fetch();
+        return $result ?: null;
     }
 }

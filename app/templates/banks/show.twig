@@ -288,49 +288,61 @@
     <!-- Regular Accounts List -->
     {% set regular_accounts = accounts|filter(a => a.account_type != 'depot') %}
     <div class="bg-white shadow rounded-lg">
-        <div class="px-4 py-5 sm:px-6 border-b border-gray-200">
+        <div class="px-4 py-5 sm:px-6 border-b border-gray-200 flex justify-between items-center">
             <h3 class="text-lg font-medium leading-6 text-gray-900">Konten</h3>
+            <span class="text-xs text-gray-400" title="MQTT aktivieren um Kontodaten an Home Assistant zu senden">📡 MQTT</span>
         </div>
         
         {% if regular_accounts|length > 0 %}
         <ul role="list" class="divide-y divide-gray-200">
             {% for account in regular_accounts %}
-            <li>
-                <a href="/accounts/{{ account.id }}" class="block hover:bg-gray-50 px-4 py-4 sm:px-6">
-                    <div class="flex items-center justify-between">
-                        <div class="flex items-center">
-                            <div class="flex-shrink-0">
-                                <span class="inline-flex items-center justify-center h-10 w-10 rounded-full bg-blue-100">
-                                    <span class="text-lg">💳</span>
-                                </span>
-                            </div>
-                            <div class="ml-4">
-                                <p class="text-sm font-medium text-gray-900">{{ account.account_name ?? 'Konto' }}</p>
-                                <p class="text-sm text-gray-500">{{ account.iban }}</p>
-                                {% if account.owner_name %}
-                                <p class="text-xs text-gray-400">{{ account.owner_name }}</p>
-                                {% endif %}
-                            </div>
+            <li class="hover:bg-gray-50">
+                <div class="flex items-center px-4 py-4 sm:px-6">
+                    <a href="/accounts/{{ account.id }}" class="flex-1 flex items-center">
+                        <div class="flex-shrink-0">
+                            <span class="inline-flex items-center justify-center h-10 w-10 rounded-full bg-blue-100">
+                                <span class="text-lg">💳</span>
+                            </span>
                         </div>
-                        <div class="flex items-center">
-                            <div class="text-right mr-4">
-                                {% if account.balance is not null %}
-                                <p class="text-lg font-semibold {% if account.balance >= 0 %}text-green-600{% else %}text-red-600{% endif %}">
-                                    {{ account.balance|number_format(2, ',', '.') }} {{ account.currency }}
-                                </p>
-                                {% if account.balance_date %}
-                                <p class="text-xs text-gray-400">Stand: {{ account.balance_date|date('d.m.Y') }}</p>
-                                {% endif %}
-                                {% else %}
-                                <p class="text-sm text-gray-400">Kein Saldo</p>
-                                {% endif %}
-                            </div>
+                        <div class="ml-4">
+                            <p class="text-sm font-medium text-gray-900">{{ account.account_name ?? 'Konto' }}</p>
+                            <p class="text-sm text-gray-500">{{ account.iban }}</p>
+                            {% if account.owner_name %}
+                            <p class="text-xs text-gray-400">{{ account.owner_name }}</p>
+                            {% endif %}
+                        </div>
+                    </a>
+                    <div class="flex items-center">
+                        <div class="text-right mr-4">
+                            {% if account.balance is not null %}
+                            <p class="text-lg font-semibold {% if account.balance >= 0 %}text-green-600{% else %}text-red-600{% endif %}">
+                                {{ account.balance|number_format(2, ',', '.') }} {{ account.currency }}
+                            </p>
+                            {% if account.balance_date %}
+                            <p class="text-xs text-gray-400">Stand: {{ account.balance_date|date('d.m.Y') }}</p>
+                            {% endif %}
+                            {% else %}
+                            <p class="text-sm text-gray-400">Kein Saldo</p>
+                            {% endif %}
+                        </div>
+                        <!-- MQTT Toggle -->
+                        <div x-data="mqttToggle({{ account.id }}, {{ account.mqtt_export ?? 0 }})" class="mr-4" @click.stop>
+                            <button @click="toggle" type="button" 
+                                    class="relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2"
+                                    :class="enabled ? 'bg-green-600' : 'bg-gray-200'"
+                                    :title="enabled ? 'MQTT aktiviert' : 'MQTT deaktiviert'">
+                                <span class="sr-only">MQTT Export</span>
+                                <span class="pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out"
+                                      :class="enabled ? 'translate-x-5' : 'translate-x-0'"></span>
+                            </button>
+                        </div>
+                        <a href="/accounts/{{ account.id }}">
                             <svg class="h-5 w-5 text-gray-400" viewBox="0 0 20 20" fill="currentColor">
                                 <path fill-rule="evenodd" d="M7.21 14.77a.75.75 0 01.02-1.06L11.168 10 7.23 6.29a.75.75 0 111.04-1.08l4.5 4.25a.75.75 0 010 1.08l-4.5 4.25a.75.75 0 01-1.06-.02z" clip-rule="evenodd" />
                             </svg>
-                        </div>
+                        </a>
                     </div>
-                </a>
+                </div>
             </li>
             {% endfor %}
         </ul>
@@ -347,47 +359,59 @@
     {% set depots = accounts|filter(a => a.account_type == 'depot') %}
     {% if depots|length > 0 %}
     <div class="bg-white shadow rounded-lg">
-        <div class="px-4 py-5 sm:px-6 border-b border-gray-200">
+        <div class="px-4 py-5 sm:px-6 border-b border-gray-200 flex justify-between items-center">
             <h3 class="text-lg font-medium leading-6 text-gray-900">
                 <span class="mr-2">📈</span> Depots
             </h3>
+            <span class="text-xs text-gray-400" title="MQTT aktivieren um Depotdaten an Home Assistant zu senden">📡 MQTT</span>
         </div>
         
         <ul role="list" class="divide-y divide-gray-200">
             {% for depot in depots %}
-            <li>
-                <a href="/accounts/{{ depot.id }}" class="block hover:bg-gray-50 px-4 py-4 sm:px-6">
-                    <div class="flex items-center justify-between">
-                        <div class="flex items-center">
-                            <div class="flex-shrink-0">
-                                <span class="inline-flex items-center justify-center h-10 w-10 rounded-full bg-purple-100">
-                                    <span class="text-lg">📊</span>
-                                </span>
-                            </div>
-                            <div class="ml-4">
-                                <p class="text-sm font-medium text-gray-900">{{ depot.account_name ?? 'Depot' }}</p>
-                                <p class="text-sm text-gray-500">Depot {{ depot.account_number }}{% if depot.sub_account %} / {{ depot.sub_account }}{% endif %}</p>
-                            </div>
+            <li class="hover:bg-gray-50">
+                <div class="flex items-center px-4 py-4 sm:px-6">
+                    <a href="/accounts/{{ depot.id }}" class="flex-1 flex items-center">
+                        <div class="flex-shrink-0">
+                            <span class="inline-flex items-center justify-center h-10 w-10 rounded-full bg-purple-100">
+                                <span class="text-lg">📊</span>
+                            </span>
                         </div>
-                        <div class="flex items-center">
-                            <div class="text-right mr-4">
-                                {% if depot.balance is not null %}
-                                <p class="text-lg font-semibold text-gray-900">
-                                    {{ depot.balance|number_format(2, ',', '.') }} {{ depot.currency }}
-                                </p>
-                                {% if depot.balance_date %}
-                                <p class="text-xs text-gray-400">Stand: {{ depot.balance_date|date('d.m.Y') }}</p>
-                                {% endif %}
-                                {% else %}
-                                <p class="text-sm text-gray-400">Kein Bestand</p>
-                                {% endif %}
-                            </div>
+                        <div class="ml-4">
+                            <p class="text-sm font-medium text-gray-900">{{ depot.account_name ?? 'Depot' }}</p>
+                            <p class="text-sm text-gray-500">Depot {{ depot.account_number }}{% if depot.sub_account %} / {{ depot.sub_account }}{% endif %}</p>
+                        </div>
+                    </a>
+                    <div class="flex items-center">
+                        <div class="text-right mr-4">
+                            {% if depot.balance is not null %}
+                            <p class="text-lg font-semibold text-gray-900">
+                                {{ depot.balance|number_format(2, ',', '.') }} {{ depot.currency }}
+                            </p>
+                            {% if depot.balance_date %}
+                            <p class="text-xs text-gray-400">Stand: {{ depot.balance_date|date('d.m.Y') }}</p>
+                            {% endif %}
+                            {% else %}
+                            <p class="text-sm text-gray-400">Kein Bestand</p>
+                            {% endif %}
+                        </div>
+                        <!-- MQTT Toggle -->
+                        <div x-data="mqttToggle({{ depot.id }}, {{ depot.mqtt_export ?? 0 }})" class="mr-4" @click.stop>
+                            <button @click="toggle" type="button" 
+                                    class="relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2"
+                                    :class="enabled ? 'bg-green-600' : 'bg-gray-200'"
+                                    :title="enabled ? 'MQTT aktiviert' : 'MQTT deaktiviert'">
+                                <span class="sr-only">MQTT Export</span>
+                                <span class="pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out"
+                                      :class="enabled ? 'translate-x-5' : 'translate-x-0'"></span>
+                            </button>
+                        </div>
+                        <a href="/accounts/{{ depot.id }}">
                             <svg class="h-5 w-5 text-gray-400" viewBox="0 0 20 20" fill="currentColor">
                                 <path fill-rule="evenodd" d="M7.21 14.77a.75.75 0 01.02-1.06L11.168 10 7.23 6.29a.75.75 0 111.04-1.08l4.5 4.25a.75.75 0 010 1.08l-4.5 4.25a.75.75 0 01-1.06-.02z" clip-rule="evenodd" />
                             </svg>
-                        </div>
+                        </a>
                     </div>
-                </a>
+                </div>
             </li>
             {% endfor %}
         </ul>
@@ -466,6 +490,34 @@
 
 {% block scripts %}
 <script>
+function mqttToggle(accountId, initialValue) {
+    return {
+        accountId: accountId,
+        enabled: initialValue == 1,
+        
+        async toggle() {
+            const newValue = !this.enabled;
+            
+            try {
+                const response = await fetch(`/api/accounts/${this.accountId}/mqtt-export`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ enabled: newValue })
+                });
+                const data = await response.json();
+                
+                if (data.success) {
+                    this.enabled = newValue;
+                } else {
+                    alert(data.message || 'Fehler beim Aktualisieren');
+                }
+            } catch (error) {
+                alert('Netzwerkfehler: ' + error.message);
+            }
+        }
+    };
+}
+
 function bankCapabilities(bankId) {
     return {
         bankId: bankId,
