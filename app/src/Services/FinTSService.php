@@ -405,10 +405,17 @@ class FinTSService
      * - Account balances
      * - Transactions for all regular accounts
      * - Holdings for all depots
+     * 
+     * @param array $bankConfig Bank configuration
+     * @param array $accountsFromDb Accounts to sync
+     * @param string|null $persistedInstance Persisted FinTS session (preserves kundensystemId for TAN-free access)
      */
-    public function syncAll(array $bankConfig, array $accountsFromDb): array
+    public function syncAll(array $bankConfig, array $accountsFromDb, ?string $persistedInstance = null): array
     {
-        $this->logger->info('=== syncAll START ===', ['accounts_count' => count($accountsFromDb)]);
+        $this->logger->info('=== syncAll START ===', [
+            'accounts_count' => count($accountsFromDb),
+            'has_persisted_instance' => $persistedInstance !== null
+        ]);
         
         $results = [
             'balances' => [],
@@ -421,8 +428,17 @@ class FinTSService
             $options = $this->createOptions($bankConfig);
             $credentials = $this->createCredentials($bankConfig);
             
-            $this->finTs = FinTs::new($options, $credentials);
-            $this->selectTanMode();
+            // Use persisted instance if available (preserves kundensystemId for PSD2 90-day TAN-free access)
+            if ($persistedInstance !== null) {
+                $this->logger->info('Restoring persisted FinTS instance');
+                $this->finTs = FinTs::new($options, $credentials, $persistedInstance);
+                // Don't re-select TAN mode when restoring - it's already in the persisted state
+            } else {
+                $this->logger->info('Creating new FinTS instance');
+                $this->finTs = FinTs::new($options, $credentials);
+                // Select TAN mode only for new sessions
+                $this->selectTanMode();
+            }
             
             // Login
             $login = $this->finTs->login();
@@ -602,10 +618,23 @@ class FinTSService
             ];
             
         } catch (\Throwable $e) {
-            $this->logger->error('syncAll failed', ['error' => $e->getMessage()]);
+            $errorMessage = $e->getMessage();
+            $this->logger->error('syncAll failed', ['error' => $errorMessage]);
+            
+            // If session-related error and we had a persisted instance, retry with fresh session
+            if ($persistedInstance !== null && (
+                strpos($errorMessage, 'Dialogkontext') !== false ||
+                strpos($errorMessage, 'Dialog') !== false ||
+                strpos($errorMessage, 'session') !== false ||
+                strpos($errorMessage, 'Need to login') !== false
+            )) {
+                $this->logger->info('Session appears expired, retrying with fresh connection');
+                return $this->syncAll($bankConfig, $accountsFromDb, null);
+            }
+            
             return [
                 'success' => false,
-                'message' => 'Fehler: ' . $e->getMessage()
+                'message' => 'Fehler: ' . $errorMessage
             ];
         }
     }

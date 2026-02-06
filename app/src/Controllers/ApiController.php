@@ -219,8 +219,14 @@ class ApiController
             ], 400);
         }
         
-        // Delete old session to ensure fresh start
-        $this->db->deleteFinTSSession($bankId);
+        // Try to use existing session (preserves kundensystemId for TAN-free access per PSD2)
+        $existingSession = $this->db->getFinTSSession($bankId);
+        $persistedInstance = $existingSession ? $existingSession['session_data'] : null;
+        
+        $this->logger->info('SyncAll using session', [
+            'has_existing_session' => $persistedInstance !== null,
+            'session_created' => $existingSession['created_at'] ?? null
+        ]);
         
         $result = $this->fintsService->syncAll(
             [
@@ -229,7 +235,8 @@ class ApiController
                 'username' => $bank['username'],
                 'password' => $bank['password']
             ],
-            $accounts
+            $accounts,
+            $persistedInstance
         );
         
         // Handle TAN requirement
