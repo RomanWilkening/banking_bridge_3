@@ -47,6 +47,71 @@
             </div>
         </div>
 
+        <!-- Auto Sync Settings -->
+        <div class="bg-white shadow rounded-lg mb-6" x-data="autoSyncSettings()">
+            <div class="px-4 py-5 sm:px-6 border-b border-gray-200">
+                <h3 class="text-lg font-medium leading-6 text-gray-900">Automatische Synchronisierung</h3>
+                <p class="mt-1 text-sm text-gray-500">Bankdaten automatisch im Hintergrund aktualisieren</p>
+            </div>
+            <div class="px-4 py-5 sm:p-6 space-y-6">
+                <div class="flex items-center justify-between">
+                    <div class="flex items-center">
+                        <input type="checkbox" name="auto_sync_enabled" id="auto_sync_enabled"
+                               class="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                               {{ settings.auto_sync_enabled == '1' ? 'checked' : '' }}
+                               x-model="enabled">
+                        <label for="auto_sync_enabled" class="ml-3 block text-sm font-medium text-gray-700">
+                            Automatische Synchronisierung aktivieren
+                        </label>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <span class="text-sm" :class="status === 'running' ? 'text-green-600' : 'text-gray-500'" x-text="statusText"></span>
+                        <span x-show="status === 'running'" class="flex h-2 w-2 relative">
+                            <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+                            <span class="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
+                        </span>
+                    </div>
+                </div>
+                
+                <div>
+                    <label for="auto_sync_interval" class="block text-sm font-medium text-gray-700">Synchronisierungs-Intervall</label>
+                    <select name="auto_sync_interval" id="auto_sync_interval"
+                            class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm border px-3 py-2">
+                        <option value="15" {{ settings.auto_sync_interval == '15' ? 'selected' : '' }}>Alle 15 Minuten</option>
+                        <option value="30" {{ settings.auto_sync_interval == '30' or settings.auto_sync_interval == '' ? 'selected' : '' }}>Alle 30 Minuten</option>
+                        <option value="60" {{ settings.auto_sync_interval == '60' ? 'selected' : '' }}>Stündlich</option>
+                        <option value="120" {{ settings.auto_sync_interval == '120' ? 'selected' : '' }}>Alle 2 Stunden</option>
+                        <option value="360" {{ settings.auto_sync_interval == '360' ? 'selected' : '' }}>Alle 6 Stunden</option>
+                        <option value="720" {{ settings.auto_sync_interval == '720' ? 'selected' : '' }}>Alle 12 Stunden</option>
+                        <option value="1440" {{ settings.auto_sync_interval == '1440' ? 'selected' : '' }}>Täglich</option>
+                    </select>
+                </div>
+
+                <div class="bg-yellow-50 p-3 rounded-md">
+                    <p class="text-sm text-yellow-800">
+                        <strong>⚠️ Hinweis:</strong> Die automatische Synchronisierung funktioniert nur für Banken, 
+                        die nach der ersten manuellen Authentifizierung keine weitere TAN benötigen. 
+                        Banken die eine TAN verlangen werden übersprungen und im Aktivitätsprotokoll vermerkt.
+                    </p>
+                </div>
+
+                <div class="flex items-center gap-4 pt-2">
+                    <button type="button" @click="runNow" :disabled="syncing"
+                            class="inline-flex items-center rounded-md bg-green-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-green-500 disabled:opacity-50">
+                        <span x-show="syncing" class="loading-spinner mr-2"></span>
+                        <span x-text="syncing ? 'Synchronisiere...' : '▶ Jetzt synchronisieren'"></span>
+                    </button>
+                    <div x-show="lastSync" class="text-sm text-gray-500">
+                        Letzte Ausführung: <span x-text="lastSync"></span>
+                    </div>
+                </div>
+
+                <div x-show="message" x-cloak class="rounded-md p-3" :class="messageType === 'success' ? 'bg-green-50' : 'bg-red-50'">
+                    <p class="text-sm" :class="messageType === 'success' ? 'text-green-800' : 'text-red-800'" x-text="message"></p>
+                </div>
+            </div>
+        </div>
+
         <!-- MQTT Settings -->
         <div class="bg-white shadow rounded-lg mb-6">
             <div class="px-4 py-5 sm:px-6 border-b border-gray-200">
@@ -110,4 +175,52 @@
         </div>
     </form>
 </div>
+
+<script>
+function autoSyncSettings() {
+    return {
+        enabled: {{ settings.auto_sync_enabled == '1' ? 'true' : 'false' }},
+        status: '{{ settings.auto_sync_enabled == "1" ? "running" : "stopped" }}',
+        statusText: '{{ settings.auto_sync_enabled == "1" ? "Aktiv" : "Inaktiv" }}',
+        syncing: false,
+        message: '',
+        messageType: 'success',
+        lastSync: '{{ settings.auto_sync_last_run ?? "" }}',
+
+        async runNow() {
+            this.syncing = true;
+            this.message = '';
+
+            try {
+                const response = await fetch('/api/auto-sync/run', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                const data = await response.json();
+
+                if (data.success) {
+                    this.message = data.message;
+                    this.messageType = 'success';
+                    this.lastSync = new Date().toLocaleString('de-DE');
+                } else {
+                    this.message = data.message || 'Synchronisierung fehlgeschlagen';
+                    this.messageType = 'error';
+                }
+            } catch (error) {
+                this.message = 'Netzwerkfehler: ' + error.message;
+                this.messageType = 'error';
+            }
+
+            this.syncing = false;
+        },
+
+        init() {
+            this.$watch('enabled', (value) => {
+                this.status = value ? 'running' : 'stopped';
+                this.statusText = value ? 'Aktiv' : 'Inaktiv';
+            });
+        }
+    };
+}
+</script>
 {% endblock %}

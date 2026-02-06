@@ -985,6 +985,213 @@ class ApiController
     }
 
     /**
+     * Run automatic sync for all banks
+     * This is called by the cron job or manually from settings
+     */
+    public function runAutoSync(Request $request, Response $response): Response
+    {
+        $this->logger->info('=== AUTO SYNC STARTED ===');
+        
+        $banks = $this->db->getAllBanks();
+        
+        if (empty($banks)) {
+            return $this->jsonResponse($response, [
+                'success' => true,
+                'message' => 'Keine Banken konfiguriert',
+                'results' => []
+            ]);
+        }
+        
+        $results = [];
+        $totalStats = [
+            'banks_synced' => 0,
+            'banks_skipped' => 0,
+            'balances_updated' => 0,
+            'transactions_new' => 0,
+            'holdings_updated' => 0,
+            'errors' => []
+        ];
+        
+        foreach ($banks as $bank) {
+            $bankId = $bank['id'];
+            $bankName = $bank['name'];
+            
+            $this->logger->info('Auto-sync processing bank', ['bank_id' => $bankId, 'name' => $bankName]);
+            
+            // Get accounts for this bank
+            $accounts = $this->db->getAccountsByBankId($bankId);
+            if (empty($accounts)) {
+                $this->logger->info('Skipping bank - no accounts', ['bank_id' => $bankId]);
+                $results[$bankName] = ['status' => 'skipped', 'reason' => 'Keine Konten'];
+                $totalStats['banks_skipped']++;
+                continue;
+            }
+            
+            // Try to use existing session
+            $existingSession = $this->db->getFinTSSession($bankId);
+            $persistedInstance = $existingSession ? $existingSession['session_data'] : null;
+            
+            try {
+                $result = $this->fintsService->syncAll(
+                    [
+                        'bank_code' => $bank['bank_code'],
+                        'fints_url' => $bank['fints_url'],
+                        'username' => $bank['username'],
+                        'password' => $bank['password']
+                    ],
+                    $accounts,
+                    $persistedInstance
+                );
+                
+                // If TAN is required, skip this bank
+                if (isset($result['needs_tan']) && $result['needs_tan']) {
+                    $this->logger->info('Auto-sync: TAN required, skipping', ['bank_id' => $bankId]);
+                    $results[$bankName] = ['status' => 'skipped', 'reason' => 'TAN erforderlich'];
+                    $totalStats['banks_skipped']++;
+                    
+                    $this->db->logActivity(
+                        'auto_sync_skipped',
+                        'warning',
+                        'Automatische Synchronisierung übersprungen - TAN erforderlich',
+                        $bankId
+                    );
+                    continue;
+                }
+                
+                if (!$result['success']) {
+                    $this->logger->warning('Auto-sync failed for bank', [
+                        'bank_id' => $bankId,
+                        'error' => $result['message'] ?? 'Unknown'
+                    ]);
+                    $results[$bankName] = ['status' => 'error', 'error' => $result['message'] ?? 'Unbekannter Fehler'];
+                    $totalStats['errors'][] = "{$bankName}: " . ($result['message'] ?? 'Unbekannter Fehler');
+                    continue;
+                }
+                
+                // Process successful results
+                $bankStats = $this->processAutoSyncResults($bankId, $result);
+                $results[$bankName] = ['status' => 'success', 'stats' => $bankStats];
+                
+                $totalStats['banks_synced']++;
+                $totalStats['balances_updated'] += $bankStats['balances_updated'];
+                $totalStats['transactions_new'] += $bankStats['transactions_new'];
+                $totalStats['holdings_updated'] += $bankStats['holdings_updated'];
+                
+            } catch (\Throwable $e) {
+                $this->logger->error('Auto-sync exception', [
+                    'bank_id' => $bankId,
+                    'error' => $e->getMessage()
+                ]);
+                $results[$bankName] = ['status' => 'error', 'error' => $e->getMessage()];
+                $totalStats['errors'][] = "{$bankName}: {$e->getMessage()}";
+            }
+        }
+        
+        // Update last run timestamp
+        $this->db->setSetting('auto_sync_last_run', date('d.m.Y H:i'));
+        
+        $this->logger->info('=== AUTO SYNC COMPLETED ===', $totalStats);
+        
+        // Create summary message
+        $message = sprintf(
+            '%d Bank(en) synchronisiert, %d übersprungen. %d Salden, %d neue Transaktionen, %d Wertpapiere.',
+            $totalStats['banks_synced'],
+            $totalStats['banks_skipped'],
+            $totalStats['balances_updated'],
+            $totalStats['transactions_new'],
+            $totalStats['holdings_updated']
+        );
+        
+        if (!empty($totalStats['errors'])) {
+            $message .= ' ' . count($totalStats['errors']) . ' Fehler.';
+        }
+        
+        return $this->jsonResponse($response, [
+            'success' => true,
+            'message' => $message,
+            'stats' => $totalStats,
+            'results' => $results
+        ]);
+    }
+    
+    /**
+     * Process auto-sync results and save to database
+     */
+    private function processAutoSyncResults(int $bankId, array $result): array
+    {
+        $stats = [
+            'balances_updated' => 0,
+            'transactions_new' => 0,
+            'transactions_updated' => 0,
+            'holdings_updated' => 0
+        ];
+        
+        $results = $result['results'] ?? [];
+        
+        // Update balances
+        foreach ($results['balances'] ?? [] as $accountId => $balance) {
+            $this->db->updateAccountBalance($accountId, $balance['amount'], $balance['date']);
+            $stats['balances_updated']++;
+        }
+        
+        // Save transactions
+        foreach ($results['transactions'] ?? [] as $accountId => $transactions) {
+            $txResult = $this->db->saveTransactions($accountId, $transactions);
+            $stats['transactions_new'] += $txResult['new'];
+            $stats['transactions_updated'] += $txResult['updated'];
+        }
+        
+        // Save holdings
+        foreach ($results['holdings'] ?? [] as $accountId => $holdings) {
+            $count = $this->db->saveSecuritiesHoldings($accountId, $holdings);
+            $stats['holdings_updated'] += $count;
+            
+            $totalValue = $this->db->getDepotTotalValue($accountId);
+            if ($totalValue !== null) {
+                $this->db->updateAccountBalance($accountId, $totalValue, date('Y-m-d H:i:s'));
+            }
+        }
+        
+        // Save session
+        if (isset($result['persisted_instance'])) {
+            $this->db->saveFinTSSession($bankId, $result['persisted_instance']);
+        }
+        
+        // Log activity
+        $this->db->logActivity(
+            'auto_sync',
+            'success',
+            sprintf("Auto-Sync: %d Salden, %d neue TX, %d Wertpapiere",
+                $stats['balances_updated'],
+                $stats['transactions_new'],
+                $stats['holdings_updated']
+            ),
+            $bankId,
+            null,
+            $stats
+        );
+        
+        return $stats;
+    }
+    
+    /**
+     * Get auto-sync status
+     */
+    public function getAutoSyncStatus(Request $request, Response $response): Response
+    {
+        $enabled = $this->db->getSetting('auto_sync_enabled', '0') === '1';
+        $interval = $this->db->getSetting('auto_sync_interval', '30');
+        $lastRun = $this->db->getSetting('auto_sync_last_run', '');
+        
+        return $this->jsonResponse($response, [
+            'success' => true,
+            'enabled' => $enabled,
+            'interval' => (int) $interval,
+            'last_run' => $lastRun
+        ]);
+    }
+
+    /**
      * Helper to create JSON response
      */
     private function jsonResponse(Response $response, array $data, int $status = 200): Response

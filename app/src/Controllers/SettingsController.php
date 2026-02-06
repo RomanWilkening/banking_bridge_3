@@ -25,6 +25,9 @@ class SettingsController
             'mqtt_user' => $this->db->getSetting('mqtt_user', ''),
             'mqtt_password' => $this->db->getSetting('mqtt_password', ''),
             'mqtt_topic_prefix' => $this->db->getSetting('mqtt_topic_prefix', 'banking'),
+            'auto_sync_enabled' => $this->db->getSetting('auto_sync_enabled', '0'),
+            'auto_sync_interval' => $this->db->getSetting('auto_sync_interval', '30'),
+            'auto_sync_last_run' => $this->db->getSetting('auto_sync_last_run', ''),
         ];
 
         return $this->view->render($response, 'settings.twig', [
@@ -58,6 +61,12 @@ class SettingsController
         }
         if (isset($data['mqtt_topic_prefix'])) {
             $this->db->setSetting('mqtt_topic_prefix', trim($data['mqtt_topic_prefix']));
+        }
+
+        // Save Auto-sync settings
+        $this->db->setSetting('auto_sync_enabled', isset($data['auto_sync_enabled']) ? '1' : '0');
+        if (isset($data['auto_sync_interval'])) {
+            $this->db->setSetting('auto_sync_interval', trim($data['auto_sync_interval']));
         }
 
         $routeParser = RouteContext::fromRequest($request)->getRouteParser();
