@@ -14,6 +14,7 @@ require __DIR__ . '/../vendor/autoload.php';
 
 use App\Services\DatabaseService;
 use App\Services\FinTSService;
+use App\Services\MqttService;
 use Monolog\Logger;
 use Monolog\Handler\StreamHandler;
 
@@ -184,6 +185,13 @@ try {
     // Update timestamps
     $db->setSetting('auto_sync_last_run', date('d.m.Y H:i'));
     $db->setSetting('auto_sync_last_run_timestamp', (string) time());
+    
+    // Publish to MQTT if enabled
+    $mqttService = new MqttService($logger, $db);
+    if ($mqttService->isEnabled()) {
+        $mqttResult = $mqttService->publishAccountBalances();
+        $logger->info('MQTT publish result', $mqttResult);
+    }
     
     $logger->info('=== AUTO SYNC COMPLETED ===', $totalStats);
     

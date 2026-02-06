@@ -12,7 +12,7 @@ RUN apt-get update && apt-get install -y \
     zip \
     unzip \
     cron \
-    && docker-php-ext-install pdo pdo_sqlite mbstring \
+    && docker-php-ext-install pdo pdo_sqlite mbstring sockets \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
