@@ -14,7 +14,12 @@
                     <p class="text-sm text-gray-500">BLZ: {{ bank.bank_code }}</p>
                 </div>
             </div>
-            <div class="flex space-x-3">
+            <div class="flex flex-wrap gap-2">
+                <button @click="syncAll" :disabled="syncingAll"
+                        class="inline-flex items-center rounded-md bg-gradient-to-r from-primary-600 to-green-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:from-primary-500 hover:to-green-500 disabled:opacity-50">
+                    <span x-show="syncingAll" class="loading-spinner mr-2"></span>
+                    <span x-text="syncingAll ? 'Synchronisiere...' : '🔄 Alles synchronisieren'"></span>
+                </button>
                 <button @click="fetchAccounts" :disabled="loading"
                         class="inline-flex items-center rounded-md bg-primary-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-primary-500 disabled:opacity-50">
                     <span x-show="loading" class="loading-spinner mr-2"></span>
@@ -480,6 +485,7 @@ function bankDetails(bankId) {
         bankId: bankId,
         loading: false,
         syncingBalances: false,
+        syncingAll: false,
         showTanModal: false,
         tanRequest: null,
         tanInput: '',
@@ -488,6 +494,52 @@ function bankDetails(bankId) {
         isDecoupled: false,
         pollingInterval: null,
         pollingStatus: '',
+
+        async syncAll() {
+            this.syncingAll = true;
+            this.message = null;
+
+            try {
+                const response = await fetch(`/api/banks/${this.bankId}/sync-all`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                const data = await response.json();
+
+                if (data.needs_tan) {
+                    this.tanRequest = data.tan_request;
+                    this.isDecoupled = data.tan_request?.is_decoupled || false;
+                    this.showTanModal = true;
+                    
+                    if (this.isDecoupled) {
+                        this.pollingStatus = 'Bitte bestätigen Sie die Anfrage in Ihrer Banking-App...';
+                        this.startDecoupledPolling();
+                    }
+                } else if (data.success) {
+                    const stats = data.stats;
+                    let msg = '✓ Synchronisierung abgeschlossen: ';
+                    const parts = [];
+                    if (stats.balances_updated > 0) parts.push(`${stats.balances_updated} Salden`);
+                    if (stats.transactions_new > 0) parts.push(`${stats.transactions_new} neue Transaktionen`);
+                    if (stats.transactions_updated > 0) parts.push(`${stats.transactions_updated} aktualisierte Transaktionen`);
+                    if (stats.holdings_updated > 0) parts.push(`${stats.holdings_updated} Wertpapiere`);
+                    msg += parts.length > 0 ? parts.join(', ') : 'Alles aktuell';
+                    
+                    if (stats.errors && stats.errors.length > 0) {
+                        msg += ` (${stats.errors.length} Fehler)`;
+                    }
+                    
+                    this.message = { type: 'success', text: msg };
+                    setTimeout(() => location.reload(), 2000);
+                } else {
+                    this.message = { type: 'error', text: data.message || 'Fehler bei der Synchronisierung' };
+                }
+            } catch (error) {
+                this.message = { type: 'error', text: 'Netzwerkfehler: ' + error.message };
+            }
+
+            this.syncingAll = false;
+        },
 
         async fetchAccounts() {
             this.loading = true;

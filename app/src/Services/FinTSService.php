@@ -399,6 +399,272 @@ class FinTSService
             ];
         }
     }
+    
+    /**
+     * Sync everything for a bank in one session:
+     * - Account balances
+     * - Transactions for all regular accounts
+     * - Holdings for all depots
+     */
+    public function syncAll(array $bankConfig, array $accountsFromDb): array
+    {
+        $this->logger->info('=== syncAll START ===', ['accounts_count' => count($accountsFromDb)]);
+        
+        $results = [
+            'balances' => [],
+            'transactions' => [],
+            'holdings' => [],
+            'errors' => []
+        ];
+        
+        try {
+            $options = $this->createOptions($bankConfig);
+            $credentials = $this->createCredentials($bankConfig);
+            
+            $this->finTs = FinTs::new($options, $credentials);
+            $this->selectTanMode();
+            
+            // Login
+            $login = $this->finTs->login();
+            if ($login->needsTan()) {
+                $this->logger->info('Login requires TAN for full sync');
+                return [
+                    'success' => false,
+                    'needs_tan' => true,
+                    'tan_request' => $this->extractTanRequest($login),
+                    'persisted_action' => base64_encode(serialize($login)),
+                    'persisted_instance' => $this->finTs->persist()
+                ];
+            }
+            
+            // Get SEPA accounts
+            $getSepaAccounts = GetSEPAAccounts::create();
+            $this->finTs->execute($getSepaAccounts);
+            
+            if ($getSepaAccounts->needsTan()) {
+                return [
+                    'success' => false,
+                    'needs_tan' => true,
+                    'tan_request' => $this->extractTanRequest($getSepaAccounts),
+                    'persisted_action' => base64_encode(serialize($getSepaAccounts)),
+                    'persisted_instance' => $this->finTs->persist()
+                ];
+            }
+            
+            $sepaAccounts = $getSepaAccounts->getAccounts();
+            $this->logger->info('Got SEPA accounts', ['count' => count($sepaAccounts)]);
+            
+            // Process each account from database
+            foreach ($accountsFromDb as $dbAccount) {
+                $accountId = $dbAccount['id'];
+                $iban = $dbAccount['iban'];
+                $accountNumber = $dbAccount['account_number'];
+                $accountType = $dbAccount['account_type'] ?? 'checking';
+                
+                // Find matching SEPA account
+                $sepaAccount = null;
+                foreach ($sepaAccounts as $acc) {
+                    if ($acc->getIban() === $iban || $acc->getAccountNumber() === $accountNumber) {
+                        $sepaAccount = $acc;
+                        break;
+                    }
+                }
+                
+                if (!$sepaAccount) {
+                    $this->logger->warning('Could not find SEPA account', ['iban' => $iban, 'account_number' => $accountNumber]);
+                    continue;
+                }
+                
+                if ($accountType === 'depot') {
+                    // Fetch depot holdings
+                    $this->logger->info('Fetching depot holdings', ['account_id' => $accountId]);
+                    try {
+                        $holdingsResult = $this->fetchDepotHoldingsInternal($sepaAccount);
+                        if ($holdingsResult['success']) {
+                            $results['holdings'][$accountId] = $holdingsResult['holdings'];
+                            $this->logger->info('Got depot holdings', [
+                                'account_id' => $accountId,
+                                'count' => count($holdingsResult['holdings'])
+                            ]);
+                        } else {
+                            $results['errors'][] = "Depot {$accountId}: " . ($holdingsResult['message'] ?? 'Unbekannter Fehler');
+                        }
+                    } catch (\Throwable $e) {
+                        $this->logger->warning('Failed to fetch depot holdings', [
+                            'account_id' => $accountId,
+                            'error' => $e->getMessage()
+                        ]);
+                        $results['errors'][] = "Depot {$accountId}: " . $e->getMessage();
+                    }
+                } else {
+                    // Fetch balance
+                    $this->logger->info('Fetching balance', ['account_id' => $accountId, 'iban' => $iban]);
+                    try {
+                        $balance = $this->getAccountBalance($sepaAccount);
+                        if ($balance) {
+                            $results['balances'][$accountId] = $balance;
+                            $this->logger->info('Got balance', [
+                                'account_id' => $accountId,
+                                'balance' => $balance['amount']
+                            ]);
+                        }
+                    } catch (\Throwable $e) {
+                        $this->logger->warning('Failed to fetch balance', [
+                            'account_id' => $accountId,
+                            'error' => $e->getMessage()
+                        ]);
+                    }
+                    
+                    // Fetch transactions (last 30 days)
+                    $this->logger->info('Fetching transactions', ['account_id' => $accountId]);
+                    try {
+                        $from = new \DateTime('-30 days');
+                        $to = new \DateTime();
+                        
+                        $txResult = $this->fetchTransactionsInternal($sepaAccount, $from, $to);
+                        if ($txResult['success']) {
+                            $results['transactions'][$accountId] = $txResult['transactions'];
+                            $this->logger->info('Got transactions', [
+                                'account_id' => $accountId,
+                                'count' => count($txResult['transactions'])
+                            ]);
+                        } else {
+                            $results['errors'][] = "Transaktionen {$accountId}: " . ($txResult['message'] ?? 'Unbekannter Fehler');
+                        }
+                    } catch (\Throwable $e) {
+                        $this->logger->warning('Failed to fetch transactions', [
+                            'account_id' => $accountId,
+                            'error' => $e->getMessage()
+                        ]);
+                        $results['errors'][] = "Transaktionen {$accountId}: " . $e->getMessage();
+                    }
+                }
+            }
+            
+            return [
+                'success' => true,
+                'results' => $results,
+                'persisted_instance' => $this->finTs->persist()
+            ];
+            
+        } catch (\Throwable $e) {
+            $this->logger->error('syncAll failed', ['error' => $e->getMessage()]);
+            return [
+                'success' => false,
+                'message' => 'Fehler: ' . $e->getMessage()
+            ];
+        }
+    }
+    
+    /**
+     * Internal method to fetch transactions (used within an existing session)
+     */
+    private function fetchTransactionsInternal(SEPAAccount $account, \DateTime $from, \DateTime $to): array
+    {
+        // Check BPD for supported formats
+        $supportsMT940 = false;
+        $supportsCAMT = false;
+        
+        try {
+            $bpd = $this->finTs->getBpd();
+            if ($bpd) {
+                $mt940Params = $bpd->parameters['HIKAZS'] ?? [];
+                $camtParams = $bpd->parameters['HICAZS'] ?? [];
+                
+                foreach (array_keys($mt940Params) as $version) {
+                    if (in_array((int)$version, [4, 5, 6, 7])) {
+                        $supportsMT940 = true;
+                        break;
+                    }
+                }
+                
+                foreach (array_keys($camtParams) as $version) {
+                    if ((int)$version === 1) {
+                        $supportsCAMT = true;
+                        break;
+                    }
+                }
+            }
+        } catch (Exception $e) {
+            $supportsMT940 = true;
+            $supportsCAMT = true;
+        }
+
+        $errors = [];
+        
+        // Try MT940
+        if ($supportsMT940) {
+            try {
+                $getStatement = GetStatementOfAccount::create($account, $from, $to);
+                $this->finTs->execute($getStatement);
+
+                if (!$getStatement->needsTan()) {
+                    $result = $this->processTransactionsResult($getStatement);
+                    if ($result['success'] && count($result['transactions'] ?? []) > 0) {
+                        return $result;
+                    }
+                }
+            } catch (\Throwable $e) {
+                $errors['MT940'] = $e->getMessage();
+            }
+        }
+
+        // Try CAMT
+        if ($supportsCAMT) {
+            try {
+                $result = $this->fetchTransactionsXML($account, $from, $to);
+                if (isset($result['success']) && $result['success']) {
+                    return $result;
+                }
+            } catch (\Throwable $e) {
+                $errors['CAMT'] = $e->getMessage();
+            }
+        }
+
+        return [
+            'success' => true,
+            'transactions' => [],
+            'message' => 'Keine Transaktionen gefunden'
+        ];
+    }
+    
+    /**
+     * Internal method to fetch depot holdings (used within an existing session)
+     */
+    private function fetchDepotHoldingsInternal(SEPAAccount $account): array
+    {
+        if (!class_exists(GetDepotAufstellung::class)) {
+            return [
+                'success' => false,
+                'message' => 'Depot-Abfrage nicht unterstützt'
+            ];
+        }
+        
+        try {
+            $getDepot = GetDepotAufstellung::create($account);
+            $this->finTs->execute($getDepot);
+            
+            if ($getDepot->needsTan()) {
+                return [
+                    'success' => false,
+                    'message' => 'TAN erforderlich für Depot-Abfrage'
+                ];
+            }
+            
+            $holdings = $this->processDepotResult($getDepot);
+            
+            return [
+                'success' => true,
+                'holdings' => $holdings
+            ];
+            
+        } catch (\Throwable $e) {
+            return [
+                'success' => false,
+                'message' => $e->getMessage()
+            ];
+        }
+    }
 
     /**
      * Submit TAN and continue action
