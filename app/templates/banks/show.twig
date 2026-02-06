@@ -20,6 +20,11 @@
                     <span x-show="loading" class="loading-spinner mr-2"></span>
                     <span x-text="loading ? 'Lade...' : 'Konten abrufen'"></span>
                 </button>
+                <button @click="syncBalances" :disabled="syncingBalances"
+                        class="inline-flex items-center rounded-md bg-green-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-green-500 disabled:opacity-50">
+                    <span x-show="syncingBalances" class="loading-spinner mr-2"></span>
+                    <span x-text="syncingBalances ? 'Lade...' : 'Salden aktualisieren'"></span>
+                </button>
                 <form method="POST" action="/banks/{{ bank.id }}/delete" 
                       onsubmit="return confirm('Sind Sie sicher, dass Sie diese Bankverbindung löschen möchten?');">
                     <button type="submit" class="inline-flex items-center rounded-md bg-red-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-red-500">
@@ -474,6 +479,7 @@ function bankDetails(bankId) {
     return {
         bankId: bankId,
         loading: false,
+        syncingBalances: false,
         showTanModal: false,
         tanRequest: null,
         tanInput: '',
@@ -512,6 +518,39 @@ function bankDetails(bankId) {
             }
 
             this.loading = false;
+        },
+        
+        async syncBalances() {
+            this.syncingBalances = true;
+            this.message = null;
+
+            try {
+                const response = await fetch(`/api/banks/${this.bankId}/balances`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                const data = await response.json();
+
+                if (data.needs_tan) {
+                    this.tanRequest = data.tan_request;
+                    this.isDecoupled = data.tan_request?.is_decoupled || false;
+                    this.showTanModal = true;
+                    
+                    if (this.isDecoupled) {
+                        this.pollingStatus = 'Bitte bestätigen Sie die Anfrage in Ihrer Banking-App...';
+                        this.startDecoupledPolling();
+                    }
+                } else if (data.success) {
+                    this.message = { type: 'success', text: `${data.updated_count} Kontosalden aktualisiert!` };
+                    setTimeout(() => location.reload(), 1500);
+                } else {
+                    this.message = { type: 'error', text: data.message || 'Fehler beim Abrufen der Salden' };
+                }
+            } catch (error) {
+                this.message = { type: 'error', text: 'Netzwerkfehler: ' + error.message };
+            }
+
+            this.syncingBalances = false;
         },
 
         startDecoupledPolling() {

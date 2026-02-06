@@ -258,7 +258,9 @@ class FinTSService
     }
 
     /**
-     * Get account balance
+     * Get account balance using GetBalance action
+     * Based on phpFinTS: GetBalance->getBalances() returns HISAL[]
+     * HISAL->getGebuchterSaldo() returns Sdo with getAmount(), getCurrency(), getTimestamp()
      */
     private function getAccountBalance(SEPAAccount $account): ?array
     {
@@ -269,46 +271,27 @@ class FinTSService
             if (!$getBalance->needsTan()) {
                 $balances = $getBalance->getBalances();
                 if (!empty($balances)) {
-                    $balance = reset($balances);
+                    // Get first HISAL segment
+                    $hisal = reset($balances);
                     
-                    // Try different methods to get amount depending on phpFinTS version
-                    $amount = null;
-                    $date = null;
+                    // Get booked balance (gebuchter Saldo)
+                    $saldo = $hisal->getGebuchterSaldo();
                     
-                    // Try getBooked() first (newer API)
-                    if (method_exists($balance, 'getBooked')) {
-                        $booked = $balance->getBooked();
-                        if ($booked && method_exists($booked, 'getAmount')) {
-                            $amountObj = $booked->getAmount();
-                            $amount = is_object($amountObj) && method_exists($amountObj, 'toFloat') 
-                                ? $amountObj->toFloat() 
-                                : (float) $amountObj;
-                        }
-                    }
-                    
-                    // Fallback: try direct getAmount()
-                    if ($amount === null && method_exists($balance, 'getAmount')) {
-                        $amountObj = $balance->getAmount();
-                        if (is_object($amountObj) && method_exists($amountObj, 'toFloat')) {
-                            $amount = $amountObj->toFloat();
-                        } elseif (is_numeric($amountObj)) {
-                            $amount = (float) $amountObj;
-                        }
-                    }
-                    
-                    // Try to get date
-                    if (method_exists($balance, 'getDate')) {
-                        $dateObj = $balance->getDate();
-                        $date = $dateObj ? $dateObj->format('Y-m-d H:i:s') : null;
-                    } elseif (method_exists($balance, 'getValutaDate')) {
-                        $dateObj = $balance->getValutaDate();
-                        $date = $dateObj ? $dateObj->format('Y-m-d H:i:s') : null;
-                    }
-                    
-                    if ($amount !== null) {
+                    if ($saldo) {
+                        $amount = $saldo->getAmount();
+                        $currency = $saldo->getCurrency();
+                        $timestamp = $saldo->getTimestamp();
+                        
+                        $this->logger->debug('Got balance from bank', [
+                            'amount' => $amount,
+                            'currency' => $currency,
+                            'timestamp' => $timestamp ? $timestamp->format('Y-m-d H:i:s') : null
+                        ]);
+                        
                         return [
                             'amount' => $amount,
-                            'date' => $date
+                            'currency' => $currency,
+                            'date' => $timestamp ? $timestamp->format('Y-m-d H:i:s') : date('Y-m-d H:i:s')
                         ];
                     }
                 }
@@ -318,6 +301,103 @@ class FinTSService
         }
 
         return null;
+    }
+    
+    /**
+     * Fetch balances for all accounts of a bank
+     * This is a dedicated method to refresh account balances
+     */
+    public function fetchAccountBalances(array $bankConfig, ?string $persistedInstance = null): array
+    {
+        $this->logger->info('=== fetchAccountBalances START ===');
+        
+        try {
+            $options = $this->createOptions($bankConfig);
+            $credentials = $this->createCredentials($bankConfig);
+            
+            if ($persistedInstance) {
+                $this->finTs = FinTs::new($options, $credentials, $persistedInstance);
+            } else {
+                $this->finTs = FinTs::new($options, $credentials);
+                $this->selectTanMode();
+            }
+            
+            // Login
+            $login = $this->finTs->login();
+            if ($login->needsTan()) {
+                $this->logger->info('Login requires TAN for balance fetch');
+                return [
+                    'success' => false,
+                    'needs_tan' => true,
+                    'tan_request' => $this->extractTanRequest($login),
+                    'persisted_action' => base64_encode(serialize($login)),
+                    'persisted_instance' => $this->finTs->persist()
+                ];
+            }
+            
+            // Get SEPA accounts
+            $getSepaAccounts = GetSEPAAccounts::create();
+            $this->finTs->execute($getSepaAccounts);
+            
+            if ($getSepaAccounts->needsTan()) {
+                return [
+                    'success' => false,
+                    'needs_tan' => true,
+                    'tan_request' => $this->extractTanRequest($getSepaAccounts),
+                    'persisted_action' => base64_encode(serialize($getSepaAccounts)),
+                    'persisted_instance' => $this->finTs->persist()
+                ];
+            }
+            
+            $accounts = $getSepaAccounts->getAccounts();
+            $balances = [];
+            
+            foreach ($accounts as $account) {
+                $iban = $account->getIban();
+                $accountNumber = $account->getAccountNumber();
+                
+                // Skip depots (they don't have a balance in the traditional sense)
+                if (empty($iban)) {
+                    continue;
+                }
+                
+                try {
+                    $balance = $this->getAccountBalance($account);
+                    if ($balance !== null) {
+                        $balances[] = [
+                            'iban' => $iban,
+                            'account_number' => $accountNumber,
+                            'balance' => $balance['amount'],
+                            'currency' => $balance['currency'] ?? 'EUR',
+                            'balance_date' => $balance['date']
+                        ];
+                        
+                        $this->logger->info('Fetched balance', [
+                            'iban' => $iban,
+                            'balance' => $balance['amount']
+                        ]);
+                    }
+                } catch (\Throwable $e) {
+                    $this->logger->warning('Could not get balance for account', [
+                        'iban' => $iban,
+                        'error' => $e->getMessage()
+                    ]);
+                }
+            }
+            
+            return [
+                'success' => true,
+                'balances' => $balances,
+                'persisted_instance' => $this->finTs->persist()
+            ];
+            
+        } catch (\Throwable $e) {
+            $this->logger->error('fetchAccountBalances failed', ['error' => $e->getMessage()]);
+            return [
+                'success' => false,
+                'message' => 'Fehler: ' . $e->getMessage()
+            ];
+        }
     }
 
     /**

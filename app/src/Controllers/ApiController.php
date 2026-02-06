@@ -111,6 +111,87 @@ class ApiController
 
         return $this->jsonResponse($response, $result);
     }
+    
+    /**
+     * Sync account balances from bank
+     */
+    public function syncBalances(Request $request, Response $response, array $args): Response
+    {
+        $this->logger->info('=== SYNC BALANCES STARTED ===', ['args' => $args]);
+        
+        $bankId = (int) $args['id'];
+        $bank = $this->db->getBankById($bankId);
+        
+        if (!$bank) {
+            return $this->jsonResponse($response, [
+                'success' => false,
+                'message' => 'Bank nicht gefunden'
+            ], 404);
+        }
+        
+        // Delete old session to ensure fresh start
+        $this->db->deleteFinTSSession($bankId);
+        
+        $result = $this->fintsService->fetchAccountBalances([
+            'bank_code' => $bank['bank_code'],
+            'fints_url' => $bank['fints_url'],
+            'username' => $bank['username'],
+            'password' => $bank['password']
+        ]);
+        
+        // Handle TAN requirement
+        if (isset($result['needs_tan']) && $result['needs_tan']) {
+            $this->db->saveFinTSSession($bankId, $result['persisted_instance']);
+            $_SESSION['fints_action_' . $bankId] = $result['persisted_action'];
+            
+            return $this->jsonResponse($response, [
+                'success' => false,
+                'needs_tan' => true,
+                'tan_request' => $result['tan_request']
+            ]);
+        }
+        
+        if (!$result['success']) {
+            return $this->jsonResponse($response, $result);
+        }
+        
+        // Update balances in database
+        $updatedCount = 0;
+        if (isset($result['balances'])) {
+            foreach ($result['balances'] as $balanceData) {
+                // Find account by IBAN
+                $accounts = $this->db->getAccountsByBankId($bankId);
+                foreach ($accounts as $account) {
+                    if ($account['iban'] === $balanceData['iban']) {
+                        $this->db->updateAccountBalance(
+                            $account['id'],
+                            $balanceData['balance'],
+                            $balanceData['balance_date']
+                        );
+                        $updatedCount++;
+                        $this->logger->info('Updated balance', [
+                            'account_id' => $account['id'],
+                            'iban' => $balanceData['iban'],
+                            'balance' => $balanceData['balance']
+                        ]);
+                        break;
+                    }
+                }
+            }
+        }
+        
+        // Save session
+        if (isset($result['persisted_instance'])) {
+            $this->db->saveFinTSSession($bankId, $result['persisted_instance']);
+        }
+        
+        return $this->jsonResponse($response, [
+            'success' => true,
+            'message' => "Kontosalden aktualisiert",
+            'updated_count' => $updatedCount,
+            'balances' => $result['balances'] ?? []
+        ]);
+    }
 
     /**
      * Submit TAN for ongoing action
