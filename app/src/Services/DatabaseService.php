@@ -449,16 +449,53 @@ class DatabaseService
         return $result ?: null;
     }
 
+    /**
+     * Generate a unique transaction ID for deduplication
+     * Uses stable fields that don't change between syncs
+     */
+    private function generateTransactionId(int $accountId, array $data): string
+    {
+        // Priority: Use bank-provided unique identifiers if available
+        if (!empty($data['end_to_end_id']) && $data['end_to_end_id'] !== 'NOTPROVIDED') {
+            return md5($accountId . ':e2e:' . $data['end_to_end_id']);
+        }
+        
+        if (!empty($data['prima_nota'])) {
+            return md5($accountId . ':pn:' . $data['prima_nota'] . ':' . ($data['booking_date'] ?? ''));
+        }
+        
+        // Fallback: Create hash from transaction details
+        // Use only stable fields (amount, date, truncated name)
+        $name = substr($data['name'] ?? '', 0, 50); // Truncate name to avoid minor variations
+        return md5(
+            $accountId . ':' .
+            ($data['booking_date'] ?? '') . ':' .
+            number_format((float)($data['amount'] ?? 0), 2, '.', '') . ':' .
+            $name
+        );
+    }
+
+    /**
+     * Check if a transaction already exists
+     */
+    public function transactionExists(int $accountId, string $transactionId): bool
+    {
+        $stmt = $this->pdo->prepare("SELECT 1 FROM transactions WHERE account_id = ? AND transaction_id = ? LIMIT 1");
+        $stmt->execute([$accountId, $transactionId]);
+        return $stmt->fetch() !== false;
+    }
+
+    /**
+     * Save a single transaction (insert or update)
+     * Returns 1 if new, 0 if updated existing
+     */
     public function saveTransaction(int $accountId, array $data): int
     {
-        // Generate a unique transaction ID if not provided
-        $transactionId = $data['transaction_id'] ?? md5(
-            $accountId . 
-            ($data['booking_date'] ?? '') . 
-            ($data['amount'] ?? '') . 
-            ($data['name'] ?? '') . 
-            ($data['description'] ?? '')
-        );
+        // Generate a unique transaction ID
+        $transactionId = $data['transaction_id'] ?? $this->generateTransactionId($accountId, $data);
+        
+        // Check if this is a new transaction
+        $isNew = !$this->transactionExists($accountId, $transactionId);
 
         $stmt = $this->pdo->prepare("
             INSERT OR REPLACE INTO transactions (
@@ -486,17 +523,32 @@ class DatabaseService
             $data['prima_nota'] ?? null
         ]);
         
-        return (int) $this->pdo->lastInsertId();
+        return $isNew ? 1 : 0;
     }
 
-    public function saveTransactions(int $accountId, array $transactions): int
+    /**
+     * Save multiple transactions
+     * Returns array with counts: ['new' => X, 'updated' => Y, 'total' => Z]
+     */
+    public function saveTransactions(int $accountId, array $transactions): array
     {
-        $count = 0;
+        $newCount = 0;
+        $updatedCount = 0;
+        
         foreach ($transactions as $transaction) {
-            $this->saveTransaction($accountId, $transaction);
-            $count++;
+            $result = $this->saveTransaction($accountId, $transaction);
+            if ($result === 1) {
+                $newCount++;
+            } else {
+                $updatedCount++;
+            }
         }
-        return $count;
+        
+        return [
+            'new' => $newCount,
+            'updated' => $updatedCount,
+            'total' => $newCount + $updatedCount
+        ];
     }
 
     public function getTransactionsByAccountId(int $accountId, int $limit = 30, int $offset = 0): array

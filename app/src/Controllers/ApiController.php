@@ -380,10 +380,16 @@ class ApiController
                 'count' => count($result['transactions'])
             ]);
             
+            $txResult = ['new' => 0, 'updated' => 0, 'total' => 0];
+            
             // Save transactions
             if ($pendingSyncAccountId) {
-                $count = $this->db->saveTransactions($pendingSyncAccountId, $result['transactions']);
-                $this->logger->info('Saved transactions after TAN', ['count' => $count]);
+                $txResult = $this->db->saveTransactions($pendingSyncAccountId, $result['transactions']);
+                $this->logger->info('Saved transactions after TAN', [
+                    'new' => $txResult['new'],
+                    'updated' => $txResult['updated'],
+                    'total' => $txResult['total']
+                ]);
                 
                 // Update balance
                 if (isset($result['balance'])) {
@@ -399,7 +405,9 @@ class ApiController
             return $this->jsonResponse($response, [
                 'success' => true,
                 'message' => 'Transaktionen synchronisiert',
-                'count' => count($result['transactions']),
+                'new_count' => $txResult['new'],
+                'updated_count' => $txResult['updated'],
+                'count' => $txResult['total'],
                 'balance' => $result['balance'] ?? null
             ]);
         }
@@ -516,10 +524,17 @@ class ApiController
             return $this->jsonResponse($response, $result);
         }
 
+        $txResult = ['new' => 0, 'updated' => 0, 'total' => 0];
+        
         // Save transactions to database
         if (isset($result['transactions'])) {
-            $count = $this->db->saveTransactions($accountId, $result['transactions']);
-            $this->logger->info('Saved transactions', ['count' => $count, 'account_id' => $accountId]);
+            $txResult = $this->db->saveTransactions($accountId, $result['transactions']);
+            $this->logger->info('Saved transactions', [
+                'new' => $txResult['new'],
+                'updated' => $txResult['updated'],
+                'total' => $txResult['total'],
+                'account_id' => $accountId
+            ]);
         }
 
         // Update account balance
@@ -535,7 +550,9 @@ class ApiController
         return $this->jsonResponse($response, [
             'success' => true,
             'message' => 'Transaktionen synchronisiert',
-            'count' => count($result['transactions'] ?? []),
+            'new_count' => $txResult['new'],
+            'updated_count' => $txResult['updated'],
+            'count' => $txResult['total'],
             'balance' => $result['balance'] ?? null
         ]);
     }

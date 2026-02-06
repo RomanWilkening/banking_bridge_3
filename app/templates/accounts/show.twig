@@ -257,7 +257,10 @@ function accountDetails(accountId, bankId) {
                         this.startDecoupledPolling();
                     }
                 } else if (data.success) {
-                    this.message = { type: 'success', text: `${data.count} Transaktionen synchronisiert!` };
+                    const msg = data.new_count > 0 
+                        ? `${data.new_count} neue Transaktionen, ${data.updated_count} aktualisiert`
+                        : `${data.count} Transaktionen geprüft (keine neuen)`;
+                    this.message = { type: 'success', text: msg };
                     setTimeout(() => location.reload(), 1500);
                 } else {
                     this.message = { type: 'error', text: data.message || 'Fehler beim Synchronisieren' };
@@ -293,7 +296,10 @@ function accountDetails(accountId, bankId) {
                 } else if (data.success) {
                     this.stopDecoupledPolling();
                     this.showTanModal = false;
-                    this.message = { type: 'success', text: 'Transaktionen synchronisiert!' };
+                    const msg = data.new_count > 0 
+                        ? `${data.new_count} neue Transaktionen, ${data.updated_count} aktualisiert`
+                        : `${data.count || 0} Transaktionen geprüft`;
+                    this.message = { type: 'success', text: msg };
                     setTimeout(() => location.reload(), 1500);
                 } else if (!data.needs_tan) {
                     this.stopDecoupledPolling();
