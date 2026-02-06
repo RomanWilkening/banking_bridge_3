@@ -1268,6 +1268,173 @@ class ApiController
         return $data;
     }
     
+    // =====================================
+    // Public Depot API (v1)
+    // =====================================
+    
+    /**
+     * List all depots
+     * GET /api/v1/depots
+     */
+    public function listDepots(Request $request, Response $response): Response
+    {
+        $depots = $this->db->getAllDepots();
+        
+        return $this->jsonResponse($response, [
+            'success' => true,
+            'count' => count($depots),
+            'depots' => array_map(function($d) {
+                return [
+                    'id' => (int) $d['id'],
+                    'name' => $d['account_name'],
+                    'account_number' => $d['account_number'],
+                    'sub_account' => $d['sub_account'],
+                    'bank' => $d['bank_name'],
+                    'bank_code' => $d['bank_code'],
+                    'total_value' => $d['balance'] !== null ? round((float) $d['balance'], 2) : null,
+                    'currency' => $d['currency'] ?? 'EUR',
+                    'last_update' => $d['balance_date'],
+                ];
+            }, $depots)
+        ]);
+    }
+    
+    /**
+     * Get a single depot with summary
+     * GET /api/v1/depots/{id}
+     */
+    public function getDepot(Request $request, Response $response, array $args): Response
+    {
+        $depotId = (int) $args['id'];
+        $depot = $this->db->getAccountWithBank($depotId);
+        
+        if (!$depot || $depot['account_type'] !== 'depot') {
+            return $this->jsonResponse($response, [
+                'success' => false,
+                'error' => 'Depot nicht gefunden'
+            ], 404);
+        }
+        
+        $holdings = $this->db->getSecuritiesHoldings($depotId);
+        $totalValue = $this->db->getDepotTotalValue($depotId);
+        
+        return $this->jsonResponse($response, [
+            'success' => true,
+            'depot' => [
+                'id' => (int) $depot['id'],
+                'name' => $depot['account_name'],
+                'account_number' => $depot['account_number'],
+                'sub_account' => $depot['sub_account'],
+                'bank' => $depot['bank_name'],
+                'bank_code' => $depot['bank_code'],
+                'total_value' => $totalValue !== null ? round($totalValue, 2) : null,
+                'currency' => $depot['currency'] ?? 'EUR',
+                'last_update' => $depot['balance_date'],
+                'holdings_count' => count($holdings),
+            ]
+        ]);
+    }
+    
+    /**
+     * List holdings for a specific depot
+     * GET /api/v1/depots/{id}/holdings
+     */
+    public function listDepotHoldings(Request $request, Response $response, array $args): Response
+    {
+        $depotId = (int) $args['id'];
+        $depot = $this->db->getAccountWithBank($depotId);
+        
+        if (!$depot || $depot['account_type'] !== 'depot') {
+            return $this->jsonResponse($response, [
+                'success' => false,
+                'error' => 'Depot nicht gefunden'
+            ], 404);
+        }
+        
+        $holdings = $this->db->getSecuritiesHoldings($depotId);
+        
+        return $this->jsonResponse($response, [
+            'success' => true,
+            'depot' => [
+                'id' => (int) $depot['id'],
+                'name' => $depot['account_name'],
+                'bank' => $depot['bank_name'],
+            ],
+            'count' => count($holdings),
+            'holdings' => array_map(function($h) {
+                return [
+                    'isin' => $h['isin'],
+                    'wkn' => $h['wkn'],
+                    'name' => $h['name'],
+                    'quantity' => (float) $h['quantity'],
+                    'currency' => $h['currency'] ?? 'EUR',
+                    'current_price' => $h['current_price'] !== null ? round((float) $h['current_price'], 4) : null,
+                    'purchase_price' => $h['purchase_price'] !== null ? round((float) $h['purchase_price'], 4) : null,
+                    'total_value' => $h['total_value'] !== null ? round((float) $h['total_value'], 2) : null,
+                    'profit_loss' => $h['profit_loss'] !== null ? round((float) $h['profit_loss'], 2) : null,
+                    'profit_loss_percent' => $h['profit_loss_percent'] !== null ? round((float) $h['profit_loss_percent'], 2) : null,
+                    'price_date' => $h['price_date'],
+                    'updated_at' => $h['updated_at'],
+                ];
+            }, $holdings)
+        ]);
+    }
+    
+    /**
+     * List all holdings across all depots
+     * GET /api/v1/holdings
+     * Optional query params: ?isin=XX&wkn=XX&name=XX
+     */
+    public function listAllHoldings(Request $request, Response $response): Response
+    {
+        $holdings = $this->db->getAllSecuritiesHoldings();
+        $params = $request->getQueryParams();
+        
+        // Optional filtering
+        if (!empty($params['isin'])) {
+            $isin = strtoupper($params['isin']);
+            $holdings = array_filter($holdings, fn($h) => stripos($h['isin'] ?? '', $isin) !== false);
+        }
+        if (!empty($params['wkn'])) {
+            $wkn = strtoupper($params['wkn']);
+            $holdings = array_filter($holdings, fn($h) => stripos($h['wkn'] ?? '', $wkn) !== false);
+        }
+        if (!empty($params['name'])) {
+            $name = $params['name'];
+            $holdings = array_filter($holdings, fn($h) => stripos($h['name'] ?? '', $name) !== false);
+        }
+        
+        // Re-index array after filtering
+        $holdings = array_values($holdings);
+        
+        return $this->jsonResponse($response, [
+            'success' => true,
+            'count' => count($holdings),
+            'holdings' => array_map(function($h) {
+                return [
+                    'isin' => $h['isin'],
+                    'wkn' => $h['wkn'],
+                    'name' => $h['name'],
+                    'quantity' => (float) $h['quantity'],
+                    'currency' => $h['currency'] ?? 'EUR',
+                    'current_price' => $h['current_price'] !== null ? round((float) $h['current_price'], 4) : null,
+                    'purchase_price' => $h['purchase_price'] !== null ? round((float) $h['purchase_price'], 4) : null,
+                    'total_value' => $h['total_value'] !== null ? round((float) $h['total_value'], 2) : null,
+                    'profit_loss' => $h['profit_loss'] !== null ? round((float) $h['profit_loss'], 2) : null,
+                    'profit_loss_percent' => $h['profit_loss_percent'] !== null ? round((float) $h['profit_loss_percent'], 2) : null,
+                    'price_date' => $h['price_date'],
+                    'depot' => [
+                        'id' => (int) $h['depot_id'],
+                        'name' => $h['depot_name'],
+                        'number' => $h['depot_number'],
+                        'bank' => $h['bank_name'],
+                    ],
+                    'updated_at' => $h['updated_at'],
+                ];
+            }, $holdings)
+        ]);
+    }
+    
     // MQTT Methods
     
     /**

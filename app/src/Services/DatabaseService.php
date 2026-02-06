@@ -827,4 +827,55 @@ class DatabaseService
         $result = $stmt->fetch();
         return $result ?: null;
     }
+    
+    // Depot API Methods
+    
+    /**
+     * Get all depot accounts with bank information
+     */
+    public function getAllDepots(): array
+    {
+        $stmt = $this->pdo->query("
+            SELECT a.*, b.name as bank_name, b.bank_code
+            FROM accounts a
+            JOIN banks b ON a.bank_id = b.id
+            WHERE a.account_type = 'depot'
+            ORDER BY b.name, a.account_name
+        ");
+        return $stmt->fetchAll();
+    }
+    
+    /**
+     * Get all securities holdings across all depots
+     */
+    public function getAllSecuritiesHoldings(): array
+    {
+        $stmt = $this->pdo->query("
+            SELECT h.*, a.account_name as depot_name, a.account_number as depot_number,
+                   b.name as bank_name, a.id as depot_id
+            FROM securities_holdings h
+            JOIN accounts a ON h.account_id = a.id
+            JOIN banks b ON a.bank_id = b.id
+            ORDER BY b.name, a.account_name, h.name
+        ");
+        return $stmt->fetchAll();
+    }
+    
+    /**
+     * Get securities holdings with depot and bank info
+     */
+    public function getSecuritiesHoldingsWithContext(int $accountId): array
+    {
+        $stmt = $this->pdo->prepare("
+            SELECT h.*, a.account_name as depot_name, a.account_number as depot_number,
+                   b.name as bank_name
+            FROM securities_holdings h
+            JOIN accounts a ON h.account_id = a.id
+            JOIN banks b ON a.bank_id = b.id
+            WHERE h.account_id = ?
+            ORDER BY h.total_value DESC
+        ");
+        $stmt->execute([$accountId]);
+        return $stmt->fetchAll();
+    }
 }
