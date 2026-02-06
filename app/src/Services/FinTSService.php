@@ -932,8 +932,10 @@ class FinTSService
      * @param string $persistedAction Persisted action waiting for TAN
      * @param array|null $syncContext If set, continue with transaction sync after TAN confirmation
      *                                ['account_identifier' => string, 'from' => DateTime, 'to' => DateTime]
+     * @param array|null $syncAllContext If set, continue with full sync after TAN confirmation
+     *                                   Array of accounts from database to sync
      */
-    public function checkDecoupledStatus(array $bankConfig, string $persistedInstance, string $persistedAction, ?array $syncContext = null): array
+    public function checkDecoupledStatus(array $bankConfig, string $persistedInstance, string $persistedAction, ?array $syncContext = null, ?array $syncAllContext = null): array
     {
         try {
             $options = $this->createOptions($bankConfig);
@@ -976,6 +978,14 @@ class FinTSService
                     ];
                 }
 
+                // If we have a syncAll context, continue with full sync in this session
+                if ($syncAllContext !== null && !empty($syncAllContext)) {
+                    $this->logger->info('=== Continuing with FULL SYNC after TAN ===', [
+                        'accounts_count' => count($syncAllContext)
+                    ]);
+                    return $this->continueSyncAllAfterTan($getSepaAccounts->getAccounts(), $syncAllContext);
+                }
+
                 // If we have a sync context, continue with transaction fetching in this session
                 if ($syncContext !== null) {
                     $this->logger->info('Continuing with transaction sync in same session', $syncContext);
@@ -1003,6 +1013,229 @@ class FinTSService
                 'message' => 'Fehler bei Statusabfrage: ' . $e->getMessage()
             ];
         }
+    }
+    
+    /**
+     * Continue the full sync operation after TAN confirmation
+     * Uses the already-authenticated session to fetch all data
+     */
+    private function continueSyncAllAfterTan(array $sepaAccounts, array $accountsFromDb): array
+    {
+        $this->logger->info('=== continueSyncAllAfterTan START ===', [
+            'sepa_accounts' => count($sepaAccounts),
+            'db_accounts' => count($accountsFromDb)
+        ]);
+        
+        $results = [
+            'balances' => [],
+            'transactions' => [],
+            'holdings' => [],
+            'errors' => []
+        ];
+        
+        $from = new \DateTime('-30 days');
+        $to = new \DateTime();
+        
+        // Log all SEPA accounts for debugging
+        foreach ($sepaAccounts as $idx => $acc) {
+            $subAcc = method_exists($acc, 'getSubAccount') ? $acc->getSubAccount() : null;
+            $this->logger->debug('SEPA account available', [
+                'index' => $idx,
+                'iban' => $acc->getIban(),
+                'account_number' => $acc->getAccountNumber(),
+                'sub_account' => $subAcc
+            ]);
+        }
+        
+        // Process each account from database
+        foreach ($accountsFromDb as $dbAccount) {
+            $accountId = $dbAccount['id'];
+            $iban = $dbAccount['iban'];
+            $accountNumber = $dbAccount['account_number'];
+            $subAccount = $dbAccount['sub_account'] ?? null;
+            $accountType = $dbAccount['account_type'] ?? 'checking';
+            $accountName = $dbAccount['account_name'] ?? 'Unbekannt';
+            
+            $this->logger->info('Processing account in continueSyncAll', [
+                'id' => $accountId,
+                'name' => $accountName,
+                'type' => $accountType,
+                'iban' => $iban,
+                'account_number' => $accountNumber,
+                'sub_account' => $subAccount
+            ]);
+            
+            // Find matching SEPA account
+            $sepaAccount = $this->findMatchingSepaAccount($sepaAccounts, $dbAccount);
+            
+            if (!$sepaAccount) {
+                $this->logger->warning('No matching SEPA account found', [
+                    'account_id' => $accountId,
+                    'account_name' => $accountName
+                ]);
+                $results['errors'][] = [
+                    'account_id' => $accountId,
+                    'error' => 'Kein passendes SEPA-Konto gefunden'
+                ];
+                continue;
+            }
+            
+            $this->logger->info('Found matching SEPA account', [
+                'db_account_id' => $accountId,
+                'sepa_iban' => $sepaAccount->getIban(),
+                'sepa_account_number' => $sepaAccount->getAccountNumber()
+            ]);
+            
+            if ($accountType === 'depot') {
+                // Fetch holdings for depots
+                try {
+                    $this->logger->info('Fetching depot holdings', ['account_id' => $accountId]);
+                    $holdingsResult = $this->fetchDepotHoldingsInternal($sepaAccount);
+                    
+                    if ($holdingsResult['success'] && !empty($holdingsResult['holdings'])) {
+                        $results['holdings'][$accountId] = $holdingsResult['holdings'];
+                        $this->logger->info('Depot holdings fetched', [
+                            'account_id' => $accountId,
+                            'count' => count($holdingsResult['holdings'])
+                        ]);
+                    } elseif (!$holdingsResult['success']) {
+                        $results['errors'][] = [
+                            'account_id' => $accountId,
+                            'error' => 'Depot: ' . ($holdingsResult['message'] ?? 'Unbekannter Fehler')
+                        ];
+                    }
+                } catch (\Throwable $e) {
+                    $this->logger->error('Failed to fetch holdings in continueSyncAll', [
+                        'account_id' => $accountId,
+                        'error' => $e->getMessage()
+                    ]);
+                    $results['errors'][] = [
+                        'account_id' => $accountId,
+                        'error' => 'Depot: ' . $e->getMessage()
+                    ];
+                }
+            } else {
+                // Fetch balance for regular accounts
+                try {
+                    $this->logger->info('Fetching balance', ['account_id' => $accountId]);
+                    $balance = $this->getAccountBalance($sepaAccount);
+                    
+                    if ($balance !== null) {
+                        $results['balances'][$accountId] = $balance;
+                        $this->logger->info('Balance fetched', [
+                            'account_id' => $accountId,
+                            'amount' => $balance['amount']
+                        ]);
+                    }
+                } catch (\Throwable $e) {
+                    $this->logger->error('Failed to fetch balance in continueSyncAll', [
+                        'account_id' => $accountId,
+                        'error' => $e->getMessage()
+                    ]);
+                    $results['errors'][] = [
+                        'account_id' => $accountId,
+                        'error' => 'Saldo: ' . $e->getMessage()
+                    ];
+                }
+                
+                // Fetch transactions for regular accounts
+                try {
+                    $this->logger->info('Fetching transactions', ['account_id' => $accountId]);
+                    $txResult = $this->fetchTransactionsInternal($sepaAccount, $from, $to);
+                    
+                    if ($txResult['success'] && !empty($txResult['transactions'])) {
+                        $results['transactions'][$accountId] = $txResult['transactions'];
+                        $this->logger->info('Transactions fetched', [
+                            'account_id' => $accountId,
+                            'count' => count($txResult['transactions'])
+                        ]);
+                    } elseif (!$txResult['success']) {
+                        $results['errors'][] = [
+                            'account_id' => $accountId,
+                            'error' => 'Transaktionen: ' . ($txResult['message'] ?? 'Unbekannter Fehler')
+                        ];
+                    }
+                } catch (\Throwable $e) {
+                    $this->logger->error('Failed to fetch transactions in continueSyncAll', [
+                        'account_id' => $accountId,
+                        'error' => $e->getMessage()
+                    ]);
+                    $results['errors'][] = [
+                        'account_id' => $accountId,
+                        'error' => 'Transaktionen: ' . $e->getMessage()
+                    ];
+                }
+            }
+        }
+        
+        $this->logger->info('=== continueSyncAllAfterTan COMPLETE ===', [
+            'balances' => count($results['balances']),
+            'transactions_accounts' => count($results['transactions']),
+            'holdings_accounts' => count($results['holdings']),
+            'errors' => count($results['errors'])
+        ]);
+        
+        return [
+            'success' => true,
+            'is_sync_all' => true,
+            'results' => $results,
+            'persisted_instance' => $this->finTs->persist()
+        ];
+    }
+    
+    /**
+     * Find matching SEPA account for a database account
+     */
+    private function findMatchingSepaAccount(array $sepaAccounts, array $dbAccount): ?SEPAAccount
+    {
+        $iban = $dbAccount['iban'] ?? null;
+        $accountNumber = $dbAccount['account_number'] ?? null;
+        $subAccount = $dbAccount['sub_account'] ?? null;
+        $accountType = $dbAccount['account_type'] ?? 'checking';
+        
+        foreach ($sepaAccounts as $acc) {
+            $accIban = $acc->getIban();
+            $accNum = $acc->getAccountNumber();
+            $accSubNum = method_exists($acc, 'getSubAccount') ? $acc->getSubAccount() : null;
+            
+            // Match by IBAN (for regular accounts)
+            if (!empty($iban) && $accIban === $iban) {
+                return $acc;
+            }
+            
+            // Match by account number + sub-account (for depots)
+            if ($accNum === $accountNumber) {
+                // If both have sub-accounts, they must match
+                if ($subAccount && $accSubNum) {
+                    if ($subAccount === $accSubNum) {
+                        return $acc;
+                    }
+                }
+                // If DB account has sub-account but SEPA doesn't expose it, 
+                // check if sub-account might be part of account number
+                elseif ($subAccount && !$accSubNum) {
+                    // Some banks include sub-account in the account number
+                    if (strpos($accNum, $subAccount) !== false) {
+                        return $acc;
+                    }
+                    // For depots, sub-account match is critical
+                    if ($accountType === 'depot') {
+                        continue;
+                    }
+                }
+                // If no sub-account on either side, match on account number
+                elseif (!$subAccount) {
+                    return $acc;
+                }
+            }
+            
+            // Special case: sub-account might be stored in account_number field
+            if ($accountType === 'depot' && $subAccount && $accNum === $subAccount) {
+                return $acc;
+            }
+        }
+        
+        return null;
     }
     
     /**
