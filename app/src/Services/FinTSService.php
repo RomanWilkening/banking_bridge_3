@@ -392,10 +392,23 @@ class FinTSService
             ];
             
         } catch (\Throwable $e) {
-            $this->logger->error('fetchAccountBalances failed', ['error' => $e->getMessage()]);
+            $errorMessage = $e->getMessage();
+            $this->logger->error('fetchAccountBalances failed', ['error' => $errorMessage]);
+            
+            // If session-related error and we had a persisted instance, retry with fresh session
+            if ($persistedInstance !== null && (
+                strpos($errorMessage, 'Dialogkontext') !== false ||
+                strpos($errorMessage, 'Dialog') !== false ||
+                strpos($errorMessage, 'session') !== false ||
+                strpos($errorMessage, 'Need to login') !== false
+            )) {
+                $this->logger->info('Session appears expired, retrying with fresh connection');
+                return $this->fetchAccountBalances($bankConfig, null);
+            }
+            
             return [
                 'success' => false,
-                'message' => 'Fehler: ' . $e->getMessage()
+                'message' => 'Fehler: ' . $errorMessage
             ];
         }
     }
@@ -1855,23 +1868,36 @@ class FinTSService
 
     /**
      * Sync account transactions - combined method that handles everything in one session
+     * 
+     * @param array $bankConfig Bank configuration
+     * @param string $accountIdentifier IBAN or account number
+     * @param \DateTime $from Start date
+     * @param \DateTime $to End date
+     * @param string|null $persistedInstance Persisted FinTS session (preserves kundensystemId for TAN-free access)
      */
-    public function syncAccountTransactions(array $bankConfig, string $accountIdentifier, \DateTime $from, \DateTime $to): array
+    public function syncAccountTransactions(array $bankConfig, string $accountIdentifier, \DateTime $from, \DateTime $to, ?string $persistedInstance = null): array
     {
         $this->logger->info('=== syncAccountTransactions START ===', [
             'bank_code' => $bankConfig['bank_code'] ?? 'unknown',
             'account' => $accountIdentifier,
             'from' => $from->format('Y-m-d'),
-            'to' => $to->format('Y-m-d')
+            'to' => $to->format('Y-m-d'),
+            'has_persisted_instance' => $persistedInstance !== null
         ]);
         
         try {
             $options = $this->createOptions($bankConfig);
             $credentials = $this->createCredentials($bankConfig);
             
-            // Always start fresh
-            $this->finTs = FinTs::new($options, $credentials);
-            $this->selectTanMode();
+            // Use persisted instance if available (preserves kundensystemId for PSD2 90-day TAN-free access)
+            if ($persistedInstance !== null) {
+                $this->logger->info('Restoring persisted FinTS instance for transaction sync');
+                $this->finTs = FinTs::new($options, $credentials, $persistedInstance);
+            } else {
+                $this->logger->info('Creating new FinTS instance for transaction sync');
+                $this->finTs = FinTs::new($options, $credentials);
+                $this->selectTanMode();
+            }
 
             // Login
             $login = $this->finTs->login();
@@ -1992,6 +2018,7 @@ class FinTSService
                         
                         // If we got transactions, return them
                         if ($txCount > 0) {
+                            $mt940Result['persisted_instance'] = $this->finTs->persist();
                             return $mt940Result;
                         }
                         // If 0 transactions, try CAMT before returning (might have better data)
@@ -2018,6 +2045,7 @@ class FinTSService
                         
                         // If CAMT has transactions, return it
                         if ($txCount > 0) {
+                            $camtResult['persisted_instance'] = $this->finTs->persist();
                             return $camtResult;
                         }
                     }
@@ -2041,6 +2069,8 @@ class FinTSService
                     'transactions' => count($mt940Result['transactions'] ?? []),
                     'balance' => $mt940Result['balance'] ?? null
                 ]);
+                // Add persisted instance for session reuse
+                $mt940Result['persisted_instance'] = $this->finTs->persist();
                 return $mt940Result;
             }
             
@@ -2049,6 +2079,8 @@ class FinTSService
                 $this->logger->info('Returning CAMT result (may have 0 transactions)', [
                     'transactions' => count($camtResult['transactions'] ?? [])
                 ]);
+                // Add persisted instance for session reuse
+                $camtResult['persisted_instance'] = $this->finTs->persist();
                 return $camtResult;
             }
 
@@ -2076,10 +2108,23 @@ class FinTSService
             ];
 
         } catch (\Throwable $e) {
-            $this->logger->error('Sync failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
+            $errorMessage = $e->getMessage();
+            $this->logger->error('Sync failed', ['error' => $errorMessage, 'trace' => $e->getTraceAsString()]);
+            
+            // If session-related error and we had a persisted instance, retry with fresh session
+            if ($persistedInstance !== null && (
+                strpos($errorMessage, 'Dialogkontext') !== false ||
+                strpos($errorMessage, 'Dialog') !== false ||
+                strpos($errorMessage, 'session') !== false ||
+                strpos($errorMessage, 'Need to login') !== false
+            )) {
+                $this->logger->info('Session appears expired, retrying with fresh connection');
+                return $this->syncAccountTransactions($bankConfig, $accountIdentifier, $from, $to, null);
+            }
+            
             return [
                 'success' => false,
-                'message' => 'Fehler: ' . $e->getMessage()
+                'message' => 'Fehler: ' . $errorMessage
             ];
         }
     }
@@ -2194,10 +2239,23 @@ class FinTSService
             }
             
         } catch (\Throwable $e) {
-            $this->logger->error('getDepotHoldings failed', ['error' => $e->getMessage()]);
+            $errorMessage = $e->getMessage();
+            $this->logger->error('getDepotHoldings failed', ['error' => $errorMessage]);
+            
+            // If session-related error and we had a persisted instance, retry with fresh session
+            if ($persistedInstance !== null && (
+                strpos($errorMessage, 'Dialogkontext') !== false ||
+                strpos($errorMessage, 'Dialog') !== false ||
+                strpos($errorMessage, 'session') !== false ||
+                strpos($errorMessage, 'Need to login') !== false
+            )) {
+                $this->logger->info('Session appears expired, retrying with fresh connection');
+                return $this->getDepotHoldings($bankConfig, $accountIdentifier, null);
+            }
+            
             return [
                 'success' => false,
-                'message' => 'Fehler: ' . $e->getMessage()
+                'message' => 'Fehler: ' . $errorMessage
             ];
         }
     }
