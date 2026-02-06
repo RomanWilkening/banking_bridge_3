@@ -39,6 +39,31 @@ class FinTSService
     {
         $this->productId = $productId;
     }
+    
+    /**
+     * Properly close the dialog and persist the session for future reuse.
+     * 
+     * IMPORTANT: The persisted instance contains dialogId and messageNumber.
+     * If we persist without closing, the next restore will try to continue
+     * an already-ended dialog, causing "Nachricht hat nicht die erwartete 
+     * Nachrichtennummer" errors.
+     * 
+     * By calling close() first, the dialogId is set to null, so the next
+     * login() will start a fresh dialog while keeping the kundensystemId,
+     * BPD, UPD, and TAN mode selection for faster reconnection.
+     */
+    private function persistAfterClose(): string
+    {
+        if ($this->finTs !== null) {
+            try {
+                $this->finTs->close();
+                $this->logger->debug('Dialog closed before persisting session');
+            } catch (\Throwable $e) {
+                $this->logger->warning('Could not close dialog', ['error' => $e->getMessage()]);
+            }
+        }
+        return $this->finTs->persist();
+    }
 
     /**
      * Create FinTS options object
@@ -388,7 +413,7 @@ class FinTSService
             return [
                 'success' => true,
                 'balances' => $balances,
-                'persisted_instance' => $this->finTs->persist()
+                'persisted_instance' => $this->persistAfterClose()
             ];
             
         } catch (\Throwable $e) {
@@ -640,7 +665,7 @@ class FinTSService
             return [
                 'success' => true,
                 'results' => $results,
-                'persisted_instance' => $this->finTs->persist()
+                'persisted_instance' => $this->persistAfterClose()
             ];
             
         } catch (\Throwable $e) {
@@ -898,7 +923,7 @@ class FinTSService
         return [
             'success' => true,
             'accounts' => $result,
-            'persisted_instance' => $this->finTs->persist()
+            'persisted_instance' => $this->persistAfterClose()
         ];
     }
     
@@ -1234,7 +1259,7 @@ class FinTSService
             'success' => true,
             'is_sync_all' => true,
             'results' => $results,
-            'persisted_instance' => $this->finTs->persist()
+            'persisted_instance' => $this->persistAfterClose()
         ];
     }
     
@@ -1578,7 +1603,7 @@ class FinTSService
                 'transactions' => [],
                 'balance' => null,
                 'balance_date' => null,
-                'persisted_instance' => $this->finTs->persist()
+                'persisted_instance' => $this->persistAfterClose()
             ];
         }
         
@@ -2031,7 +2056,7 @@ class FinTSService
                         
                         // If we got transactions, return them
                         if ($txCount > 0) {
-                            $mt940Result['persisted_instance'] = $this->finTs->persist();
+                            $mt940Result['persisted_instance'] = $this->persistAfterClose();
                             return $mt940Result;
                         }
                         // If 0 transactions, try CAMT before returning (might have better data)
@@ -2058,7 +2083,7 @@ class FinTSService
                         
                         // If CAMT has transactions, return it
                         if ($txCount > 0) {
-                            $camtResult['persisted_instance'] = $this->finTs->persist();
+                            $camtResult['persisted_instance'] = $this->persistAfterClose();
                             return $camtResult;
                         }
                     }
@@ -2082,8 +2107,8 @@ class FinTSService
                     'transactions' => count($mt940Result['transactions'] ?? []),
                     'balance' => $mt940Result['balance'] ?? null
                 ]);
-                // Add persisted instance for session reuse
-                $mt940Result['persisted_instance'] = $this->finTs->persist();
+                // Add persisted instance for session reuse (close dialog first)
+                $mt940Result['persisted_instance'] = $this->persistAfterClose();
                 return $mt940Result;
             }
             
@@ -2092,8 +2117,8 @@ class FinTSService
                 $this->logger->info('Returning CAMT result (may have 0 transactions)', [
                     'transactions' => count($camtResult['transactions'] ?? [])
                 ]);
-                // Add persisted instance for session reuse
-                $camtResult['persisted_instance'] = $this->finTs->persist();
+                // Add persisted instance for session reuse (close dialog first)
+                $camtResult['persisted_instance'] = $this->persistAfterClose();
                 return $camtResult;
             }
 
@@ -2240,7 +2265,7 @@ class FinTSService
                 return [
                     'success' => true,
                     'holdings' => $holdings,
-                    'persisted_instance' => $this->finTs->persist()
+                    'persisted_instance' => $this->persistAfterClose()
                 ];
                 
             } catch (\Throwable $e) {
