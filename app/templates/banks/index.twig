@@ -87,7 +87,7 @@
                     <ul class="space-y-2">
                         {% for account in bank.accounts|slice(0, 3) %}
                         <li class="flex justify-between items-center text-sm">
-                            <span class="text-gray-600 truncate">{{ account.account_name ?? account.iban }}</span>
+                            <span class="text-gray-600 truncate">{{ account.custom_name ?? account.account_name ?? account.iban }}</span>
                             {% if account.balance is not null %}
                             <span class="font-medium {% if account.balance >= 0 %}text-green-600{% else %}text-red-600{% endif %}">
                                 {{ account.balance|number_format(2, ',', '.') }} €

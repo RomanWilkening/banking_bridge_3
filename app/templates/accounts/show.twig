@@ -9,8 +9,20 @@
                 <span class="inline-flex items-center justify-center h-14 w-14 rounded-full bg-primary-100">
                     <span class="text-2xl">💳</span>
                 </span>
-                <div class="ml-4">
-                    <h3 class="text-lg font-medium text-gray-900">{{ account.account_name ?? 'Konto' }}</h3>
+                <div class="ml-4" x-data="editableName('account', {{ account.id }}, '{{ (account.custom_name ?? account.account_name ?? 'Konto')|e('js') }}')">
+                    <div class="flex items-center gap-2">
+                        <h3 x-show="!editing" class="text-lg font-medium text-gray-900" x-text="displayName"></h3>
+                        <input x-show="editing" x-model="editName" @keyup.enter="save" @keyup.escape="cancel"
+                               x-ref="nameInput" type="text"
+                               class="text-lg font-medium text-gray-900 border-b border-primary-500 focus:outline-none bg-transparent">
+                        <button x-show="!editing" @click="edit" class="text-gray-400 hover:text-primary-500" title="Umbenennen">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/>
+                            </svg>
+                        </button>
+                        <button x-show="editing" @click="save" class="text-green-500 hover:text-green-600">✓</button>
+                        <button x-show="editing" @click="cancel" class="text-red-500 hover:text-red-600">✕</button>
+                    </div>
                     <p class="text-sm text-gray-500">{{ account.iban }}</p>
                     <p class="text-xs text-gray-400">{{ bank.name }}</p>
                 </div>
@@ -218,6 +230,56 @@
 
 {% block scripts %}
 <script>
+function editableName(type, id, initialName) {
+    return {
+        type: type,
+        id: id,
+        displayName: initialName,
+        editName: initialName,
+        editing: false,
+        
+        edit() {
+            this.editName = this.displayName;
+            this.editing = true;
+            this.$nextTick(() => this.$refs.nameInput.focus());
+        },
+        
+        async save() {
+            if (!this.editName.trim()) {
+                this.cancel();
+                return;
+            }
+            
+            const url = this.type === 'bank' 
+                ? `/api/banks/${this.id}` 
+                : `/api/accounts/${this.id}`;
+            
+            try {
+                const response = await fetch(url, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name: this.editName.trim() })
+                });
+                const data = await response.json();
+                
+                if (data.success) {
+                    this.displayName = this.editName.trim();
+                    this.editing = false;
+                } else {
+                    alert(data.message || 'Fehler beim Speichern');
+                }
+            } catch (error) {
+                alert('Netzwerkfehler: ' + error.message);
+            }
+        },
+        
+        cancel() {
+            this.editName = this.displayName;
+            this.editing = false;
+        }
+    };
+}
+
 function accountDetails(accountId, bankId) {
     return {
         accountId: accountId,

@@ -70,9 +70,12 @@ class AccountController
         $transactions = $this->db->getTransactionsByAccountId($accountId, $limit, $offset);
         $totalTransactions = $this->db->getTransactionCount($accountId);
         $totalPages = max(1, ceil($totalTransactions / $limit));
+        
+        // Get display name
+        $displayName = $account['custom_name'] ?? $account['account_name'] ?? 'Konto';
 
         return $this->view->render($response, 'accounts/show.twig', [
-            'title' => $account['account_name'] ?? 'Konto',
+            'title' => $displayName,
             'account' => $account,
             'bank' => $bank,
             'transactions' => $transactions,
