@@ -454,26 +454,80 @@ class FinTSService
             $sepaAccounts = $getSepaAccounts->getAccounts();
             $this->logger->info('Got SEPA accounts', ['count' => count($sepaAccounts)]);
             
+            // Log all SEPA accounts for debugging
+            foreach ($sepaAccounts as $idx => $acc) {
+                $subAcc = method_exists($acc, 'getSubAccount') ? $acc->getSubAccount() : null;
+                $this->logger->debug('SEPA account', [
+                    'index' => $idx,
+                    'iban' => $acc->getIban(),
+                    'account_number' => $acc->getAccountNumber(),
+                    'sub_account' => $subAcc
+                ]);
+            }
+            
             // Process each account from database
             foreach ($accountsFromDb as $dbAccount) {
                 $accountId = $dbAccount['id'];
                 $iban = $dbAccount['iban'];
                 $accountNumber = $dbAccount['account_number'];
+                $subAccount = $dbAccount['sub_account'] ?? null;
                 $accountType = $dbAccount['account_type'] ?? 'checking';
+                $accountName = $dbAccount['account_name'] ?? 'Unbekannt';
                 
-                // Find matching SEPA account
+                $this->logger->info('Processing DB account', [
+                    'id' => $accountId,
+                    'name' => $accountName,
+                    'type' => $accountType,
+                    'iban' => $iban,
+                    'account_number' => $accountNumber,
+                    'sub_account' => $subAccount
+                ]);
+                
+                // Find matching SEPA account - for depots, also check sub_account
                 $sepaAccount = null;
                 foreach ($sepaAccounts as $acc) {
-                    if ($acc->getIban() === $iban || $acc->getAccountNumber() === $accountNumber) {
+                    $accIban = $acc->getIban();
+                    $accNum = $acc->getAccountNumber();
+                    $accSubNum = method_exists($acc, 'getSubAccount') ? $acc->getSubAccount() : null;
+                    
+                    // Match by IBAN (for regular accounts)
+                    if (!empty($iban) && $accIban === $iban) {
                         $sepaAccount = $acc;
                         break;
+                    }
+                    
+                    // Match by account number + sub-account (for depots)
+                    if ($accNum === $accountNumber) {
+                        // If both have sub-accounts, they must match
+                        if ($subAccount && $accSubNum) {
+                            if ($subAccount === $accSubNum) {
+                                $sepaAccount = $acc;
+                                break;
+                            }
+                        }
+                        // If DB account has no sub-account, match on account number only
+                        elseif (!$subAccount) {
+                            $sepaAccount = $acc;
+                            break;
+                        }
                     }
                 }
                 
                 if (!$sepaAccount) {
-                    $this->logger->warning('Could not find SEPA account', ['iban' => $iban, 'account_number' => $accountNumber]);
+                    $this->logger->warning('Could not find matching SEPA account', [
+                        'iban' => $iban, 
+                        'account_number' => $accountNumber,
+                        'sub_account' => $subAccount
+                    ]);
+                    $results['errors'][] = "Konto '{$accountName}' nicht gefunden in FinTS-Antwort";
                     continue;
                 }
+                
+                $this->logger->info('Matched SEPA account', [
+                    'db_id' => $accountId,
+                    'sepa_iban' => $sepaAccount->getIban(),
+                    'sepa_num' => $sepaAccount->getAccountNumber()
+                ]);
                 
                 if ($accountType === 'depot') {
                     // Fetch depot holdings

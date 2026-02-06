@@ -264,6 +264,16 @@ class ApiController
         foreach ($results['balances'] as $accountId => $balance) {
             $this->db->updateAccountBalance($accountId, $balance['amount'], $balance['date']);
             $stats['balances_updated']++;
+            
+            $account = $this->db->getAccountById($accountId);
+            $this->db->logActivity(
+                'fetch_balance',
+                'success',
+                sprintf("Saldo: %.2f %s", $balance['amount'], $balance['currency'] ?? 'EUR'),
+                $bankId,
+                $accountId,
+                ['balance' => $balance['amount'], 'date' => $balance['date']]
+            );
         }
         
         // Save transactions
@@ -271,6 +281,15 @@ class ApiController
             $txResult = $this->db->saveTransactions($accountId, $transactions);
             $stats['transactions_new'] += $txResult['new'];
             $stats['transactions_updated'] += $txResult['updated'];
+            
+            $this->db->logActivity(
+                'fetch_transactions',
+                'success',
+                "{$txResult['new']} neue, {$txResult['updated']} aktualisiert (von {$txResult['total']} abgerufen)",
+                $bankId,
+                $accountId,
+                $txResult
+            );
         }
         
         // Save holdings
@@ -283,6 +302,20 @@ class ApiController
             if ($totalValue !== null) {
                 $this->db->updateAccountBalance($accountId, $totalValue, date('Y-m-d H:i:s'));
             }
+            
+            $this->db->logActivity(
+                'fetch_holdings',
+                'success',
+                sprintf("%d Wertpapiere, Gesamtwert: %.2f EUR", $count, $totalValue ?? 0),
+                $bankId,
+                $accountId,
+                ['count' => $count, 'total_value' => $totalValue]
+            );
+        }
+        
+        // Log errors
+        foreach ($stats['errors'] as $error) {
+            $this->db->logActivity('sync_error', 'error', $error, $bankId);
         }
         
         // Save session
@@ -292,10 +325,52 @@ class ApiController
         
         $this->logger->info('Sync all completed', $stats);
         
+        // Log the sync all summary
+        $this->db->logActivity(
+            'sync_all',
+            empty($stats['errors']) ? 'success' : 'warning',
+            sprintf("Sync abgeschlossen: %d Salden, %d neue TX, %d Wertpapiere%s",
+                $stats['balances_updated'],
+                $stats['transactions_new'],
+                $stats['holdings_updated'],
+                count($stats['errors']) > 0 ? " ({$stats['errors'][0]} Fehler)" : ""
+            ),
+            $bankId,
+            null,
+            $stats
+        );
+        
         return $this->jsonResponse($response, [
             'success' => true,
             'message' => 'Synchronisierung abgeschlossen',
             'stats' => $stats
+        ]);
+    }
+    
+    /**
+     * Get activity log for a bank
+     */
+    public function getActivityLog(Request $request, Response $response, array $args): Response
+    {
+        $bankId = (int) $args['id'];
+        $bank = $this->db->getBankById($bankId);
+        
+        if (!$bank) {
+            return $this->jsonResponse($response, [
+                'success' => false,
+                'message' => 'Bank nicht gefunden'
+            ], 404);
+        }
+        
+        $params = $request->getQueryParams();
+        $limit = min(100, max(10, (int) ($params['limit'] ?? 100)));
+        
+        $activities = $this->db->getActivityLog($bankId, $limit);
+        
+        return $this->jsonResponse($response, [
+            'success' => true,
+            'activities' => $activities,
+            'count' => count($activities)
         ]);
     }
 
