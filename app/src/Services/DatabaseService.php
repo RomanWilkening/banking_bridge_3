@@ -162,6 +162,27 @@ class DatabaseService
             )
         ");
         
+        // Activity log for tracking sync operations
+        $this->pdo->exec("
+            CREATE TABLE IF NOT EXISTS activity_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                bank_id INTEGER,
+                account_id INTEGER,
+                action TEXT NOT NULL,
+                status TEXT NOT NULL,
+                message TEXT,
+                details TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (bank_id) REFERENCES banks(id) ON DELETE CASCADE,
+                FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE
+            )
+        ");
+        
+        $this->pdo->exec("
+            CREATE INDEX IF NOT EXISTS idx_activity_log_bank 
+            ON activity_log(bank_id, created_at DESC)
+        ");
+        
         // Run migrations for existing databases
         $this->runMigrations();
     }
@@ -661,6 +682,84 @@ class DatabaseService
     public function deleteBankCapabilities(int $bankId): bool
     {
         $stmt = $this->pdo->prepare("DELETE FROM bank_capabilities WHERE bank_id = ?");
+        return $stmt->execute([$bankId]);
+    }
+    
+    // Activity Log Methods
+    
+    /**
+     * Log an activity
+     */
+    public function logActivity(
+        string $action, 
+        string $status, 
+        ?string $message = null, 
+        ?int $bankId = null, 
+        ?int $accountId = null,
+        ?array $details = null
+    ): int {
+        $stmt = $this->pdo->prepare("
+            INSERT INTO activity_log (bank_id, account_id, action, status, message, details)
+            VALUES (?, ?, ?, ?, ?, ?)
+        ");
+        $stmt->execute([
+            $bankId,
+            $accountId,
+            $action,
+            $status,
+            $message,
+            $details ? json_encode($details) : null
+        ]);
+        
+        // Keep only last 500 entries per bank to avoid bloat
+        if ($bankId) {
+            $this->pdo->exec("
+                DELETE FROM activity_log 
+                WHERE bank_id = {$bankId} 
+                AND id NOT IN (
+                    SELECT id FROM activity_log 
+                    WHERE bank_id = {$bankId} 
+                    ORDER BY created_at DESC 
+                    LIMIT 500
+                )
+            ");
+        }
+        
+        return (int) $this->pdo->lastInsertId();
+    }
+    
+    /**
+     * Get activity log for a bank
+     */
+    public function getActivityLog(int $bankId, int $limit = 100): array
+    {
+        $stmt = $this->pdo->prepare("
+            SELECT al.*, a.account_name, a.iban
+            FROM activity_log al
+            LEFT JOIN accounts a ON al.account_id = a.id
+            WHERE al.bank_id = ?
+            ORDER BY al.created_at DESC
+            LIMIT ?
+        ");
+        $stmt->execute([$bankId, $limit]);
+        $results = $stmt->fetchAll();
+        
+        // Decode JSON details
+        foreach ($results as &$row) {
+            if ($row['details']) {
+                $row['details'] = json_decode($row['details'], true);
+            }
+        }
+        
+        return $results;
+    }
+    
+    /**
+     * Clear activity log for a bank
+     */
+    public function clearActivityLog(int $bankId): bool
+    {
+        $stmt = $this->pdo->prepare("DELETE FROM activity_log WHERE bank_id = ?");
         return $stmt->execute([$bankId]);
     }
 }
