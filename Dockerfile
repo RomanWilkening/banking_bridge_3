@@ -11,6 +11,7 @@ RUN apt-get update && apt-get install -y \
     libsqlite3-dev \
     zip \
     unzip \
+    cron \
     && docker-php-ext-install pdo pdo_sqlite mbstring \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
