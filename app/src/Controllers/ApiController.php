@@ -192,6 +192,112 @@ class ApiController
             'balances' => $result['balances'] ?? []
         ]);
     }
+    
+    /**
+     * Sync everything: balances, transactions, and depot holdings
+     */
+    public function syncAll(Request $request, Response $response, array $args): Response
+    {
+        $this->logger->info('=== SYNC ALL STARTED ===', ['args' => $args]);
+        
+        $bankId = (int) $args['id'];
+        $bank = $this->db->getBankById($bankId);
+        
+        if (!$bank) {
+            return $this->jsonResponse($response, [
+                'success' => false,
+                'message' => 'Bank nicht gefunden'
+            ], 404);
+        }
+        
+        // Get all accounts for this bank
+        $accounts = $this->db->getAccountsByBankId($bankId);
+        if (empty($accounts)) {
+            return $this->jsonResponse($response, [
+                'success' => false,
+                'message' => 'Keine Konten gefunden. Bitte zuerst Konten abrufen.'
+            ], 400);
+        }
+        
+        // Delete old session to ensure fresh start
+        $this->db->deleteFinTSSession($bankId);
+        
+        $result = $this->fintsService->syncAll(
+            [
+                'bank_code' => $bank['bank_code'],
+                'fints_url' => $bank['fints_url'],
+                'username' => $bank['username'],
+                'password' => $bank['password']
+            ],
+            $accounts
+        );
+        
+        // Handle TAN requirement
+        if (isset($result['needs_tan']) && $result['needs_tan']) {
+            $this->db->saveFinTSSession($bankId, $result['persisted_instance']);
+            $_SESSION['fints_action_' . $bankId] = $result['persisted_action'];
+            $_SESSION['fints_sync_all_bank_id'] = $bankId;
+            
+            return $this->jsonResponse($response, [
+                'success' => false,
+                'needs_tan' => true,
+                'tan_request' => $result['tan_request']
+            ]);
+        }
+        
+        if (!$result['success']) {
+            return $this->jsonResponse($response, $result);
+        }
+        
+        // Process results
+        $stats = [
+            'balances_updated' => 0,
+            'transactions_new' => 0,
+            'transactions_updated' => 0,
+            'holdings_updated' => 0,
+            'errors' => $result['results']['errors'] ?? []
+        ];
+        
+        $results = $result['results'];
+        
+        // Update balances
+        foreach ($results['balances'] as $accountId => $balance) {
+            $this->db->updateAccountBalance($accountId, $balance['amount'], $balance['date']);
+            $stats['balances_updated']++;
+        }
+        
+        // Save transactions
+        foreach ($results['transactions'] as $accountId => $transactions) {
+            $txResult = $this->db->saveTransactions($accountId, $transactions);
+            $stats['transactions_new'] += $txResult['new'];
+            $stats['transactions_updated'] += $txResult['updated'];
+        }
+        
+        // Save holdings
+        foreach ($results['holdings'] as $accountId => $holdings) {
+            $count = $this->db->saveSecuritiesHoldings($accountId, $holdings);
+            $stats['holdings_updated'] += $count;
+            
+            // Update depot total value as balance
+            $totalValue = $this->db->getDepotTotalValue($accountId);
+            if ($totalValue !== null) {
+                $this->db->updateAccountBalance($accountId, $totalValue, date('Y-m-d H:i:s'));
+            }
+        }
+        
+        // Save session
+        if (isset($result['persisted_instance'])) {
+            $this->db->saveFinTSSession($bankId, $result['persisted_instance']);
+        }
+        
+        $this->logger->info('Sync all completed', $stats);
+        
+        return $this->jsonResponse($response, [
+            'success' => true,
+            'message' => 'Synchronisierung abgeschlossen',
+            'stats' => $stats
+        ]);
+    }
 
     /**
      * Submit TAN for ongoing action

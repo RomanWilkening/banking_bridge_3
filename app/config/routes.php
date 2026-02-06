@@ -27,6 +27,7 @@ return function (App $app) {
     $app->post('/api/banks/test', [ApiController::class, 'testConnection'])->setName('api.banks.test');
     $app->get('/api/banks/{id}/accounts', [ApiController::class, 'getAccounts'])->setName('api.banks.accounts');
     $app->post('/api/banks/{id}/balances', [ApiController::class, 'syncBalances'])->setName('api.banks.balances');
+    $app->post('/api/banks/{id}/sync-all', [ApiController::class, 'syncAll'])->setName('api.banks.syncAll');
     $app->get('/api/banks/{id}/capabilities', [ApiController::class, 'getBankCapabilities'])->setName('api.banks.capabilities');
     $app->post('/api/banks/{id}/tan', [ApiController::class, 'submitTan'])->setName('api.banks.tan');
     $app->post('/api/banks/{id}/decoupled', [ApiController::class, 'checkDecoupled'])->setName('api.banks.decoupled');
