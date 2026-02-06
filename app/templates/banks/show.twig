@@ -759,11 +759,37 @@ function bankDetails(bankId) {
                 } else if (data.success) {
                     this.stopDecoupledPolling();
                     this.showTanModal = false;
-                    this.message = { type: 'success', text: 'Konten erfolgreich abgerufen!' };
-                    setTimeout(() => location.reload(), 1000);
+                    this.syncingAll = false;
+                    this.loading = false;
+                    this.syncingBalances = false;
+                    
+                    // Check if this is a syncAll result (has stats)
+                    if (data.stats) {
+                        const stats = data.stats;
+                        let msg = '✓ Synchronisierung abgeschlossen: ';
+                        const parts = [];
+                        if (stats.balances_updated > 0) parts.push(`${stats.balances_updated} Salden`);
+                        if (stats.transactions_new > 0) parts.push(`${stats.transactions_new} neue Transaktionen`);
+                        if (stats.transactions_updated > 0) parts.push(`${stats.transactions_updated} aktualisierte Transaktionen`);
+                        if (stats.holdings_updated > 0) parts.push(`${stats.holdings_updated} Wertpapiere`);
+                        msg += parts.length > 0 ? parts.join(', ') : 'Alles aktuell';
+                        
+                        if (stats.errors && stats.errors.length > 0) {
+                            msg += ` (${stats.errors.length} Fehler)`;
+                        }
+                        
+                        this.message = { type: 'success', text: msg };
+                    } else {
+                        // Regular account fetch success
+                        this.message = { type: 'success', text: data.message || 'Konten erfolgreich abgerufen!' };
+                    }
+                    setTimeout(() => location.reload(), 2000);
                 } else {
                     this.stopDecoupledPolling();
                     this.showTanModal = false;
+                    this.syncingAll = false;
+                    this.loading = false;
+                    this.syncingBalances = false;
                     this.message = { type: 'error', text: data.message || 'Fehler bei der Bestätigung' };
                 }
             } catch (error) {

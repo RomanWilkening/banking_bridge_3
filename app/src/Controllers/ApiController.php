@@ -249,7 +249,43 @@ class ApiController
             return $this->jsonResponse($response, $result);
         }
         
-        // Process results
+        // Process results using helper method
+        return $this->processSyncAllResults($bankId, $result, $response);
+    }
+    
+    /**
+     * Get activity log for a bank
+     */
+    public function getActivityLog(Request $request, Response $response, array $args): Response
+    {
+        $bankId = (int) $args['id'];
+        $bank = $this->db->getBankById($bankId);
+        
+        if (!$bank) {
+            return $this->jsonResponse($response, [
+                'success' => false,
+                'message' => 'Bank nicht gefunden'
+            ], 404);
+        }
+        
+        $params = $request->getQueryParams();
+        $limit = min(100, max(10, (int) ($params['limit'] ?? 100)));
+        
+        $activities = $this->db->getActivityLog($bankId, $limit);
+        
+        return $this->jsonResponse($response, [
+            'success' => true,
+            'activities' => $activities,
+            'count' => count($activities)
+        ]);
+    }
+    
+    /**
+     * Process and store syncAll results
+     * Used by both syncAll and checkDecoupled after TAN confirmation
+     */
+    private function processSyncAllResults(int $bankId, array $result, Response $response): Response
+    {
         $stats = [
             'balances_updated' => 0,
             'transactions_new' => 0,
@@ -265,7 +301,6 @@ class ApiController
             $this->db->updateAccountBalance($accountId, $balance['amount'], $balance['date']);
             $stats['balances_updated']++;
             
-            $account = $this->db->getAccountById($accountId);
             $this->db->logActivity(
                 'fetch_balance',
                 'success',
@@ -315,7 +350,9 @@ class ApiController
         
         // Log errors
         foreach ($stats['errors'] as $error) {
-            $this->db->logActivity('sync_error', 'error', $error, $bankId);
+            $errorMsg = is_array($error) ? ($error['error'] ?? 'Unbekannter Fehler') : $error;
+            $accountId = is_array($error) ? ($error['account_id'] ?? null) : null;
+            $this->db->logActivity('sync_error', 'error', $errorMsg, $bankId, $accountId);
         }
         
         // Save session
@@ -323,17 +360,18 @@ class ApiController
             $this->db->saveFinTSSession($bankId, $result['persisted_instance']);
         }
         
-        $this->logger->info('Sync all completed', $stats);
+        $this->logger->info('Sync all results processed', $stats);
         
         // Log the sync all summary
+        $errorCount = count($stats['errors']);
         $this->db->logActivity(
             'sync_all',
-            empty($stats['errors']) ? 'success' : 'warning',
+            $errorCount === 0 ? 'success' : 'warning',
             sprintf("Sync abgeschlossen: %d Salden, %d neue TX, %d Wertpapiere%s",
                 $stats['balances_updated'],
                 $stats['transactions_new'],
                 $stats['holdings_updated'],
-                count($stats['errors']) > 0 ? " ({$stats['errors'][0]} Fehler)" : ""
+                $errorCount > 0 ? " ({$errorCount} Fehler)" : ""
             ),
             $bankId,
             null,
@@ -344,33 +382,6 @@ class ApiController
             'success' => true,
             'message' => 'Synchronisierung abgeschlossen',
             'stats' => $stats
-        ]);
-    }
-    
-    /**
-     * Get activity log for a bank
-     */
-    public function getActivityLog(Request $request, Response $response, array $args): Response
-    {
-        $bankId = (int) $args['id'];
-        $bank = $this->db->getBankById($bankId);
-        
-        if (!$bank) {
-            return $this->jsonResponse($response, [
-                'success' => false,
-                'message' => 'Bank nicht gefunden'
-            ], 404);
-        }
-        
-        $params = $request->getQueryParams();
-        $limit = min(100, max(10, (int) ($params['limit'] ?? 100)));
-        
-        $activities = $this->db->getActivityLog($bankId, $limit);
-        
-        return $this->jsonResponse($response, [
-            'success' => true,
-            'activities' => $activities,
-            'count' => count($activities)
         ]);
     }
 
@@ -493,8 +504,23 @@ class ApiController
 
         // Check if there's a pending sync operation - if so, pass context to continue in same session
         $syncContext = null;
+        $syncAllContext = null;
         $pendingSyncAccountId = $_SESSION['fints_sync_account_id'] ?? null;
-        if ($pendingSyncAccountId) {
+        $pendingSyncAllBankId = $_SESSION['fints_sync_all_bank_id'] ?? null;
+        
+        // Check for syncAll operation
+        if ($pendingSyncAllBankId && $pendingSyncAllBankId == $bankId) {
+            $accounts = $this->db->getAccountsByBankId($bankId);
+            if (!empty($accounts)) {
+                $syncAllContext = $accounts;
+                $this->logger->info('Will continue with FULL SYNC after TAN', [
+                    'bank_id' => $bankId,
+                    'accounts_count' => count($accounts)
+                ]);
+            }
+        }
+        // Check for single account sync operation
+        elseif ($pendingSyncAccountId) {
             $account = $this->db->getAccountById($pendingSyncAccountId);
             if ($account) {
                 $syncContext = [
@@ -519,7 +545,8 @@ class ApiController
             ],
             $session['session_data'],
             $persistedAction,
-            $syncContext
+            $syncContext,
+            $syncAllContext
         );
 
         // Handle still pending
@@ -554,6 +581,16 @@ class ApiController
         // Clean up session markers
         unset($_SESSION['fints_action_' . $bankId]);
         unset($_SESSION['fints_sync_account_id']);
+        unset($_SESSION['fints_sync_all_bank_id']);
+
+        // Handle syncAll result
+        if ($result['success'] && isset($result['is_sync_all']) && $result['is_sync_all']) {
+            $this->logger->info('Processing syncAll results after TAN', [
+                'has_results' => isset($result['results'])
+            ]);
+            
+            return $this->processSyncAllResults($bankId, $result, $response);
+        }
 
         // Handle transaction sync result (has 'transactions' key)
         if ($result['success'] && isset($result['transactions'])) {
