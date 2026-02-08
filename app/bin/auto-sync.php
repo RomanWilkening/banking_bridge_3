@@ -182,9 +182,17 @@ try {
         }
     }
     
-    // Update timestamps
+    // Update timestamps and status
     $db->setSetting('auto_sync_last_run', date('d.m.Y H:i'));
     $db->setSetting('auto_sync_last_run_timestamp', (string) time());
+    
+    if (empty($totalStats['errors'])) {
+        $db->setSetting('auto_sync_last_status', 'success');
+        $db->setSetting('auto_sync_last_error', '');
+    } else {
+        $db->setSetting('auto_sync_last_status', 'partial');
+        $db->setSetting('auto_sync_last_error', 'Fehler bei: ' . implode(', ', $totalStats['errors']));
+    }
     
     // Publish to MQTT if enabled
     $mqttService = new MqttService($logger, $db);
@@ -197,6 +205,17 @@ try {
     
 } catch (\Throwable $e) {
     $logger->error('Fatal error: ' . $e->getMessage());
+    
+    // Save error status
+    try {
+        $db->setSetting('auto_sync_last_status', 'error');
+        $db->setSetting('auto_sync_last_error', $e->getMessage());
+        $db->setSetting('auto_sync_last_run', date('d.m.Y H:i'));
+        $db->setSetting('auto_sync_last_run_timestamp', (string) time());
+    } catch (\Throwable $e2) {
+        // Ignore
+    }
+    
     exit(1);
 }
 

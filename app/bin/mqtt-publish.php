@@ -66,21 +66,37 @@ try {
     $mqttService = new MqttService($logger, $db);
     $result = $mqttService->publishAccountBalances();
     
+    // Update timestamp and status
+    $db->setSetting('mqtt_last_publish_timestamp', (string) $now);
+    $db->setSetting('mqtt_last_publish', date('d.m.Y H:i:s'));
+    
     if ($result['success']) {
         $logger->info('MQTT auto-publish completed', [
             'published' => $result['published'] ?? 0,
             'errors' => count($result['errors'] ?? [])
         ]);
+        $db->setSetting('mqtt_last_status', 'success');
+        $db->setSetting('mqtt_last_error', '');
     } else {
-        $logger->warning('MQTT auto-publish failed', ['message' => $result['message'] ?? 'Unknown']);
+        $errorMsg = $result['message'] ?? 'Unknown error';
+        $logger->warning('MQTT auto-publish failed', ['message' => $errorMsg]);
+        $db->setSetting('mqtt_last_status', 'error');
+        $db->setSetting('mqtt_last_error', $errorMsg);
     }
-    
-    // Update timestamp
-    $db->setSetting('mqtt_last_publish_timestamp', (string) $now);
-    $db->setSetting('mqtt_last_publish', date('d.m.Y H:i:s'));
     
 } catch (\Throwable $e) {
     $logger->error('MQTT publish error: ' . $e->getMessage());
+    
+    // Save error status
+    try {
+        $db->setSetting('mqtt_last_status', 'error');
+        $db->setSetting('mqtt_last_error', $e->getMessage());
+        $db->setSetting('mqtt_last_publish', date('d.m.Y H:i:s'));
+        $db->setSetting('mqtt_last_publish_timestamp', (string) time());
+    } catch (\Throwable $e2) {
+        // Ignore
+    }
+    
     exit(1);
 }
 

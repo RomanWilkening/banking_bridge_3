@@ -41,6 +41,9 @@ return function (App $app) {
     $app->post('/api/auto-sync/run', [ApiController::class, 'runAutoSync'])->setName('api.autosync.run');
     $app->get('/api/auto-sync/status', [ApiController::class, 'getAutoSyncStatus'])->setName('api.autosync.status');
     
+    // Cron Status API
+    $app->get('/api/cron/status', [ApiController::class, 'getCronStatus'])->setName('api.cron.status');
+    
     // MQTT API
     $app->post('/api/mqtt/test', [ApiController::class, 'testMqtt'])->setName('api.mqtt.test');
     $app->post('/api/mqtt/publish', [ApiController::class, 'publishMqtt'])->setName('api.mqtt.publish');
