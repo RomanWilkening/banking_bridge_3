@@ -51,6 +51,10 @@ RewriteRule ^ index.php [QSA,L]' > /var/www/html/public/.htaccess
 # Install PHP dependencies
 RUN composer install --no-dev --optimize-autoloader --no-interaction
 
+# Apply phpFinTS patches (add support for HIWPDS v6)
+COPY app/patches/Fhp/Segment/WPD/*.php /var/www/html/vendor/nemiah/php-fints/lib/Fhp/Segment/WPD/
+COPY app/patches/Fhp/Action/GetDepotAufstellung.php /var/www/html/vendor/nemiah/php-fints/lib/Fhp/Action/GetDepotAufstellung.php
+
 # Create data directory with proper permissions
 RUN mkdir -p /data && chown -R www-data:www-data /data && chmod 755 /data
 
