@@ -118,24 +118,31 @@ class MT535
                 }
             }
 
-            // === Acquisition Price (Einstandskurs) ===
-            // Standard format: :70E::HOLD//1STK23,968293+EUR
-            // Baader format:   :70E::HOLD//1STK++++20250916+24,438794042+EUR (may be on multiple lines)
+            // === Acquisition Value (Einstandswert) ===
+            // Baader Bank provides the acquisition value in :70C::SUBB// block, line 4:
+            // :70C::SUBB//1 NAME\r\n2\r\n3 GDM PRICE...\r\n4 VALUE EUR ISIN, 1/SO
+            // The value on line 4 (e.g., "118.62EUR") is the total acquisition value
             
-            // First try standard format (number directly after STK)
-            if (preg_match('/:70E::HOLD\/\/\d*STK(\d+),(\d+)\+([A-Z]{3})/s', $block, $iwn)) {
-                $holding->setAcquisitionPrice((float) ($iwn[1] . '.' . $iwn[2]));
-                if ($holding->getCurrency() === null) {
-                    $holding->setCurrency($iwn[3]);
+            // Try to extract from raw data (need multiline parsing)
+            if ($isin) {
+                // Pattern to find the SUBB block for this ISIN and extract line 4 value
+                $subbPattern = '/:70C::SUBB\/\/.*?[\r\n]+\d[\r\n]+\d[^\r\n]*[\r\n]+\d\s+([\d\.]+)EUR\s*' . preg_quote($isin, '/') . '/s';
+                if (preg_match($subbPattern, $this->rawData, $subbMatch)) {
+                    $acquisitionValue = floatval($subbMatch[1]);
+                    if ($acquisitionValue > 0) {
+                        $holding->setAcquisitionPrice($acquisitionValue);
+                    }
                 }
             }
-            // Try Baader format: price is after several + signs and optional date
-            // Pattern: STK followed by +s, optional 8-digit date, +s, then price, +, currency
-            elseif (preg_match('/:70E::HOLD\/\/\d*STK[\+\s]*(?:\d{8})?[\+\s]*([\d]+[,\.][\d]+)\+([A-Z]{3})/s', $block, $iwn)) {
-                $price = str_replace(',', '.', $iwn[1]);
-                $holding->setAcquisitionPrice((float) $price);
-                if ($holding->getCurrency() === null) {
-                    $holding->setCurrency($iwn[2]);
+            
+            // Fallback: Standard format from :70E::HOLD//
+            // Standard format: :70E::HOLD//1STK23,968293+EUR
+            if ($holding->getAcquisitionPrice() === null) {
+                if (preg_match('/:70E::HOLD\/\/\d*STK(\d+),(\d+)\+([A-Z]{3})/s', $block, $iwn)) {
+                    $holding->setAcquisitionPrice((float) ($iwn[1] . '.' . $iwn[2]));
+                    if ($holding->getCurrency() === null) {
+                        $holding->setCurrency($iwn[3]);
+                    }
                 }
             }
 
