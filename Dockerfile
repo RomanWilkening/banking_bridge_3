@@ -57,9 +57,10 @@ RewriteRule ^ index.php [QSA,L]' > /var/www/html/public/.htaccess
 # Install PHP dependencies
 RUN composer install --no-dev --optimize-autoloader --no-interaction
 
-# Apply phpFinTS patches (add support for HIWPDS v6)
+# Apply phpFinTS patches (add support for HIWPDS v6 and extended MT535 parsing)
 COPY app/patches/Fhp/Segment/WPD/*.php /var/www/html/vendor/nemiah/php-fints/lib/Fhp/Segment/WPD/
 COPY app/patches/Fhp/Action/GetDepotAufstellung.php /var/www/html/vendor/nemiah/php-fints/lib/Fhp/Action/GetDepotAufstellung.php
+COPY app/patches/Fhp/MT535/MT535.php /var/www/html/vendor/nemiah/php-fints/lib/Fhp/MT535/MT535.php
 
 # Regenerate autoloader to include patched classes
 RUN composer dump-autoload --optimize --no-interaction
