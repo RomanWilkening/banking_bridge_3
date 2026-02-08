@@ -8,8 +8,8 @@ use Fhp\Segment\BaseGeschaeftsvorfallparameterOld;
 /**
  * Segment: Parameter Depotaufstellung (Version 6)
  *
- * @link https://www.hbci-zka.de/dokumente/spezifikation_deutsch/fintsv3/FinTS_3.0_Messages_Geschaeftsvorfaelle_2015-08-07_final_version.pdf
- * Section: O - Parameter Depotaufstellung
+ * @link https://www.fints.org/de/spezifikation (FinTS_3.0_Messages_Geschaeftsvorfaelle_2022-04-15)
+ * Section: C.4.3.1 Depotaufstellung - Bankparameterdaten
  */
 class HIWPDSv6 extends BaseGeschaeftsvorfallparameterOld implements HIWPDS
 {

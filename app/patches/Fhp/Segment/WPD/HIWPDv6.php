@@ -9,8 +9,8 @@ use Fhp\Syntax\Bin;
 /**
  * Segment: Depotaufstellung Kreditinstitutsrückmeldung (Version 6)
  *
- * @link https://www.hbci-zka.de/dokumente/spezifikation_deutsch/fintsv3/FinTS_3.0_Messages_Geschaeftsvorfaelle_2015-08-07_final_version.pdf
- * Section: C.4.3.1b
+ * @link https://www.fints.org/de/spezifikation (FinTS_3.0_Messages_Geschaeftsvorfaelle_2022-04-15)
+ * Section: C.4.3.1 Depotaufstellung - Kreditinstitutsrückmeldung
  */
 class HIWPDv6 extends BaseSegment implements HIWPD
 {
