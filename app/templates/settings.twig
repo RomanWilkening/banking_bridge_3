@@ -105,6 +105,37 @@
                 <div x-show="mqtt.lastError" class="mt-2 text-xs text-red-600" x-text="mqtt.lastError"></div>
             </div>
 
+            <!-- Debug Info (collapsed by default) -->
+            <div class="mt-4 pt-4 border-t border-gray-100">
+                <details class="text-xs">
+                    <summary class="text-gray-500 cursor-pointer hover:text-gray-700">Debug-Informationen anzeigen</summary>
+                    <div class="mt-2 space-y-2 bg-gray-50 p-3 rounded text-gray-600 font-mono">
+                        <div>
+                            <strong>Cron-Dateien:</strong>
+                            <template x-for="(info, name) in cronFiles" :key="name">
+                                <div class="ml-2 mt-1">
+                                    <span x-text="name"></span>: 
+                                    <span :class="info.exists ? 'text-green-600' : 'text-red-600'" x-text="info.exists ? 'existiert' : 'fehlt'"></span>
+                                    <span x-show="info.permissions" class="text-gray-400" x-text="'(' + info.permissions + ')'"></span>
+                                </div>
+                            </template>
+                        </div>
+                        <div x-show="autoSyncLog.length > 0">
+                            <strong>Auto-Sync Log (letzte Einträge):</strong>
+                            <pre class="mt-1 text-xs overflow-x-auto whitespace-pre-wrap" x-text="autoSyncLog.join('\n')"></pre>
+                        </div>
+                        <div x-show="mqttLog.length > 0">
+                            <strong>MQTT Log (letzte Einträge):</strong>
+                            <pre class="mt-1 text-xs overflow-x-auto whitespace-pre-wrap" x-text="mqttLog.join('\n')"></pre>
+                        </div>
+                        <div x-show="cronSyslog.length > 0">
+                            <strong>Cron Syslog:</strong>
+                            <pre class="mt-1 text-xs overflow-x-auto whitespace-pre-wrap" x-text="cronSyslog.join('\n')"></pre>
+                        </div>
+                    </div>
+                </details>
+            </div>
+
             <!-- Server Time -->
             <div class="mt-4 pt-4 border-t border-gray-100 text-xs text-gray-400 text-right">
                 Server-Zeit: <span x-text="serverTime"></span>
@@ -355,6 +386,10 @@ function cronMonitor() {
         loading: false,
         cronRunning: false,
         serverTime: '',
+        cronFiles: {},
+        autoSyncLog: [],
+        mqttLog: [],
+        cronSyslog: [],
         autoSync: {
             enabled: false,
             interval: 30,
@@ -386,6 +421,10 @@ function cronMonitor() {
                 if (data.success) {
                     this.cronRunning = data.cron_daemon_running;
                     this.serverTime = data.server_time;
+                    this.cronFiles = data.cron_files || {};
+                    this.autoSyncLog = data.auto_sync.recent_log || [];
+                    this.mqttLog = data.mqtt_publish.recent_log || [];
+                    this.cronSyslog = data.cron_syslog || [];
                     
                     this.autoSync = {
                         enabled: data.auto_sync.enabled,

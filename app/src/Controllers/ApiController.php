@@ -1215,6 +1215,25 @@ class ApiController
         exec('pgrep -x cron 2>/dev/null', $output, $returnCode);
         $cronRunning = ($returnCode === 0);
 
+        // Check cron configuration files
+        $cronFiles = [];
+        $cronDir = '/etc/cron.d';
+        if (is_dir($cronDir)) {
+            foreach (['auto-sync', 'mqtt-publish'] as $file) {
+                $path = "$cronDir/$file";
+                $cronFiles[$file] = [
+                    'exists' => file_exists($path),
+                    'readable' => is_readable($path),
+                    'content' => file_exists($path) ? trim(file_get_contents($path)) : null,
+                    'permissions' => file_exists($path) ? substr(sprintf('%o', fileperms($path)), -4) : null
+                ];
+            }
+        }
+
+        // Check system cron log
+        $cronSyslog = $this->readLastLogLines('/var/log/syslog', 20);
+        $cronSyslog = array_filter($cronSyslog, fn($line) => stripos($line, 'cron') !== false || stripos($line, 'CRON') !== false);
+
         // Auto-sync status
         $autoSyncEnabled = $this->db->getSetting('auto_sync_enabled', '0') === '1';
         $autoSyncInterval = (int) $this->db->getSetting('auto_sync_interval', '30');
@@ -1258,6 +1277,8 @@ class ApiController
         return $this->jsonResponse($response, [
             'success' => true,
             'cron_daemon_running' => $cronRunning,
+            'cron_files' => $cronFiles,
+            'cron_syslog' => array_values($cronSyslog),
             'auto_sync' => [
                 'enabled' => $autoSyncEnabled,
                 'interval_minutes' => $autoSyncInterval,
