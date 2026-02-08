@@ -2340,17 +2340,27 @@ class FinTSService
                 $name = $position->getName() ?? 'Unbekanntes Wertpapier';
                 $quantity = $position->getAmount() ?? 0;
                 $currentPrice = $position->getPrice();
-                $purchasePrice = $position->getAcquisitionPrice();
                 $totalValue = $position->getValue();
                 $currency = $position->getCurrency() ?? 'EUR';
                 $priceDate = $position->getDate();
                 
-                // Calculate profit/loss if we have the data
+                // The value from :70E::HOLD// is the TOTAL acquisition value, not price per unit
+                // We need to calculate the average acquisition price per unit
+                $acquisitionTotalValue = $position->getAcquisitionPrice(); // This is actually total value
+                $purchasePrice = null;
+                
+                if ($acquisitionTotalValue !== null && $quantity > 0) {
+                    // Calculate average purchase price per unit
+                    $purchasePrice = $acquisitionTotalValue / $quantity;
+                }
+                
+                // Calculate profit/loss based on total values
                 $profitLoss = null;
                 $profitLossPercent = null;
-                if ($purchasePrice !== null && $currentPrice !== null && $purchasePrice > 0) {
-                    $profitLoss = ($currentPrice - $purchasePrice) * $quantity;
-                    $profitLossPercent = (($currentPrice / $purchasePrice) - 1) * 100;
+                if ($acquisitionTotalValue !== null && $totalValue !== null && $acquisitionTotalValue > 0) {
+                    // Profit/Loss = Current total value - Acquisition total value
+                    $profitLoss = $totalValue - $acquisitionTotalValue;
+                    $profitLossPercent = (($totalValue / $acquisitionTotalValue) - 1) * 100;
                 }
                 
                 $holding = [
@@ -2374,8 +2384,11 @@ class FinTSService
                     'quantity' => $quantity,
                     'currency' => $currency,
                     'current_price' => $currentPrice,
-                    'purchase_price' => $purchasePrice,
-                    'total_value' => $totalValue
+                    'acquisition_total' => $acquisitionTotalValue,
+                    'avg_purchase_price' => $purchasePrice,
+                    'total_value' => $totalValue,
+                    'profit_loss' => $profitLoss,
+                    'profit_loss_percent' => $profitLossPercent
                 ]);
                 
                 $holdings[] = $holding;
