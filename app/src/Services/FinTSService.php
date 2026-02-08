@@ -2278,7 +2278,12 @@ class FinTSService
             
         } catch (\Throwable $e) {
             $errorMessage = $e->getMessage();
-            $this->logger->error('getDepotHoldings failed', ['error' => $errorMessage]);
+            $this->logger->error('getDepotHoldings failed', [
+                'error' => $errorMessage,
+                'exception_class' => get_class($e),
+                'previous' => $e->getPrevious() ? $e->getPrevious()->getMessage() : null,
+                'trace' => $e->getTraceAsString()
+            ]);
             
             // If session-related error and we had a persisted instance, retry with fresh session
             if ($persistedInstance !== null && (
