@@ -61,58 +61,83 @@ class MT535
             
             // === ISIN, WKN & Name Parsing ===
             // Standard format: :35B:ISIN DE0005190003/DE/519000BAY.MOTOREN WERKE AG ST
-            // Baader format:  :35B:ISIN IE000I8IKC59\r\nShortName\r\nFullName
-            if (preg_match('/^:35B:(.*?)(?=:)/sm', $block, $iwn)) {
-                $iwnContent = $iwn[1];
-                
-                // Try to extract ISIN (always 12 characters after "ISIN ")
-                if (preg_match('/ISIN\s*([A-Z]{2}[A-Z0-9]{10})/i', $iwnContent, $isinMatch)) {
-                    $holding->setISIN($isinMatch[1]);
-                }
-                
-                // Try standard format with WKN after ISIN
-                if (preg_match('/^.{5}(.{12})\/[A-Z]{2}\/(.{6})(.*)/sm', $iwnContent, $r)) {
-                    $holding->setWKN(trim($r[2]));
-                    $holding->setName(trim($r[3]));
+            // Baader format (after cleanup, lines are joined):
+            //   :35B:ISIN IE000I8IKC59IMII-MJECPA E. DLAIMII-MSCI J.ESG Cl.Par.Al.ETF
+            // We need to use the RAW block data to properly parse multiline names
+            
+            // Find the raw block from original data for name parsing
+            $isin = null;
+            $name = null;
+            
+            // First extract ISIN from cleaned data
+            if (preg_match('/:35B:.*?ISIN\s*([A-Z]{2}[A-Z0-9]{10})/i', $block, $isinMatch)) {
+                $isin = $isinMatch[1];
+                $holding->setISIN($isin);
+            }
+            
+            // Try standard format with WKN: ISIN XXXXXXXXXXXX/DE/WKNXXX Name
+            if (preg_match('/:35B:ISIN\s*([A-Z]{2}[A-Z0-9]{10})\/([A-Z]{2})\/([A-Z0-9]{6})(.*?)(?=:)/si', $block, $r)) {
+                $holding->setWKN(trim($r[3]));
+                $holding->setName(trim($r[4]));
+            }
+            // Baader format: After cleanup, content after ISIN is concatenated
+            // Pattern: ISIN + 12 chars + rest until next field
+            elseif ($isin && preg_match('/:35B:.*?ISIN\s*' . preg_quote($isin, '/') . '(.+?)(?=:\d)/s', $block, $nameMatch)) {
+                $nameContent = trim($nameMatch[1]);
+                // The name content might be "ShortNameFullName" concatenated
+                // Try to find a reasonable split point or just use the whole thing
+                // Usually the full name is longer, so we take the latter part if it looks like duplicate
+                if (strlen($nameContent) > 10) {
+                    // Check if it looks like two names concatenated (e.g., "IMII-MJECPA E. DLAIMII-MSCI J.ESG Cl.Par.Al.ETF")
+                    // The pattern often repeats the start of the name
+                    $midpoint = (int)(strlen($nameContent) / 2);
+                    $firstHalf = substr($nameContent, 0, $midpoint);
+                    $secondHalf = substr($nameContent, $midpoint);
+                    
+                    // If second half contains recognizable fund name patterns, use it
+                    if (preg_match('/(ETF|Fund|Index|UCITS|Acc|Dis|EUR|USD)/i', $secondHalf)) {
+                        $name = trim($secondHalf);
+                    } else {
+                        $name = $nameContent;
+                    }
                 } else {
-                    // Baader format: ISIN on first line, name on following lines
-                    $lines = preg_split('/[\r\n]+/', $iwnContent);
-                    if (count($lines) >= 2) {
-                        // Last non-empty line is usually the full name
-                        $name = '';
-                        for ($i = count($lines) - 1; $i >= 1; $i--) {
-                            $line = trim($lines[$i]);
-                            if (!empty($line)) {
-                                $name = $line;
-                                break;
-                            }
-                        }
-                        if (!empty($name)) {
-                            $holding->setName($name);
-                        }
-                        // WKN might not be available in this format
-                        $holding->setWKN('');
+                    $name = $nameContent;
+                }
+                $holding->setName($name);
+                $holding->setWKN('');
+            }
+            
+            // Fallback: Try to get name from raw data by finding the FIN block
+            if (($holding->getName() === null || $holding->getName() === '') && $isin) {
+                // Search in raw data for proper multiline parsing
+                $pattern = '/:16R:FIN.*?:35B:.*?ISIN\s*' . preg_quote($isin, '/') . '[\r\n]+([^\r\n:]+)[\r\n]+([^\r\n:]+)/s';
+                if (preg_match($pattern, $this->rawData, $rawMatch)) {
+                    // rawMatch[2] should be the full name (third line)
+                    $name = trim($rawMatch[2]);
+                    if (!empty($name)) {
+                        $holding->setName($name);
                     }
                 }
             }
 
             // === Acquisition Price (Einstandskurs) ===
             // Standard format: :70E::HOLD//1STK23,968293+EUR
-            // Baader format:   :70E::HOLD//1STK++++20250916+24,438794042+EUR (multiline possible)
+            // Baader format:   :70E::HOLD//1STK++++20250916+24,438794042+EUR (may be on multiple lines)
             
-            // First try standard format
-            if (preg_match('/:70E::HOLD\/\/\d*STK2(\d*),(\d*)\+([A-Z]{3})/sm', $block, $iwn)) {
+            // First try standard format (number directly after STK)
+            if (preg_match('/:70E::HOLD\/\/\d*STK(\d+),(\d+)\+([A-Z]{3})/s', $block, $iwn)) {
                 $holding->setAcquisitionPrice((float) ($iwn[1] . '.' . $iwn[2]));
                 if ($holding->getCurrency() === null) {
                     $holding->setCurrency($iwn[3]);
                 }
             }
-            // Try Baader format: :70E::HOLD//1STK++++DATE+PRICE+CURRENCY
-            elseif (preg_match('/:70E::HOLD\/\/\d*STK\+*(\d{8})?\+?\s*([\d,\.]+)\+([A-Z]{3})/sm', $block, $iwn)) {
-                $price = str_replace(',', '.', $iwn[2]);
+            // Try Baader format: price is after several + signs and optional date
+            // Pattern: STK followed by +s, optional 8-digit date, +s, then price, +, currency
+            elseif (preg_match('/:70E::HOLD\/\/\d*STK[\+\s]*(?:\d{8})?[\+\s]*([\d]+[,\.][\d]+)\+([A-Z]{3})/s', $block, $iwn)) {
+                $price = str_replace(',', '.', $iwn[1]);
                 $holding->setAcquisitionPrice((float) $price);
                 if ($holding->getCurrency() === null) {
-                    $holding->setCurrency($iwn[3]);
+                    $holding->setCurrency($iwn[2]);
                 }
             }
 
