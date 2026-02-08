@@ -82,40 +82,38 @@ class MT535
             }
             // Baader format: After cleanup, content after ISIN is concatenated
             // Pattern: ISIN + 12 chars + rest until next field
+            // We DON'T set the name here - let the fallback handle it from raw data
+            // Only set WKN to empty if we know it's Baader format
             elseif ($isin && preg_match('/:35B:.*?ISIN\s*' . preg_quote($isin, '/') . '(.+?)(?=:\d)/s', $block, $nameMatch)) {
-                $nameContent = trim($nameMatch[1]);
-                // The name content might be "ShortNameFullName" concatenated
-                // Try to find a reasonable split point or just use the whole thing
-                // Usually the full name is longer, so we take the latter part if it looks like duplicate
-                if (strlen($nameContent) > 10) {
-                    // Check if it looks like two names concatenated (e.g., "IMII-MJECPA E. DLAIMII-MSCI J.ESG Cl.Par.Al.ETF")
-                    // The pattern often repeats the start of the name
-                    $midpoint = (int)(strlen($nameContent) / 2);
-                    $firstHalf = substr($nameContent, 0, $midpoint);
-                    $secondHalf = substr($nameContent, $midpoint);
-                    
-                    // If second half contains recognizable fund name patterns, use it
-                    if (preg_match('/(ETF|Fund|Index|UCITS|Acc|Dis|EUR|USD)/i', $secondHalf)) {
-                        $name = trim($secondHalf);
-                    } else {
-                        $name = $nameContent;
-                    }
-                } else {
-                    $name = $nameContent;
-                }
-                $holding->setName($name);
+                // Don't parse concatenated name from cleaned data - it's unreliable
+                // Mark WKN as empty (Baader doesn't provide it)
                 $holding->setWKN('');
+                // Name will be set by the fallback parser below using raw data
             }
             
-            // Fallback: Try to get name from raw data by finding the FIN block
+            // Fallback: Try to get name from raw data by finding multiline structure
             if (($holding->getName() === null || $holding->getName() === '') && $isin) {
                 // Search in raw data for proper multiline parsing
-                $pattern = '/:16R:FIN.*?:35B:.*?ISIN\s*' . preg_quote($isin, '/') . '[\r\n]+([^\r\n:]+)[\r\n]+([^\r\n:]+)/s';
+                // Pattern: :35B:ISIN XXXXXXXXXXXX followed by newline, short name, newline, full name
+                $pattern = '/:35B:ISIN\s*' . preg_quote($isin, '/') . '\s*[\r\n]+([^\r\n]+)[\r\n]+([^\r\n]+)/s';
                 if (preg_match($pattern, $this->rawData, $rawMatch)) {
                     // rawMatch[2] should be the full name (third line)
                     $name = trim($rawMatch[2]);
-                    if (!empty($name)) {
+                    if (!empty($name) && strlen($name) > 2) {
                         $holding->setName($name);
+                    } elseif (!empty(trim($rawMatch[1]))) {
+                        // Use short name if full name is too short or empty
+                        $holding->setName(trim($rawMatch[1]));
+                    }
+                }
+                // If still no name, try with just one line after ISIN
+                if (($holding->getName() === null || $holding->getName() === '') && $isin) {
+                    $pattern2 = '/:35B:ISIN\s*' . preg_quote($isin, '/') . '\s*[\r\n]+([^\r\n:]+)/s';
+                    if (preg_match($pattern2, $this->rawData, $rawMatch2)) {
+                        $name = trim($rawMatch2[1]);
+                        if (!empty($name)) {
+                            $holding->setName($name);
+                        }
                     }
                 }
             }
