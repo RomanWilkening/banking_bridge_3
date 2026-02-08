@@ -1,7 +1,7 @@
 # Banking Bridge - FinTS to Home Assistant
 FROM php:8.2-apache
 
-# Install system dependencies
+# Install system dependencies including timezone data
 RUN apt-get update && apt-get install -y \
     git \
     curl \
@@ -12,18 +12,24 @@ RUN apt-get update && apt-get install -y \
     zip \
     unzip \
     cron \
+    tzdata \
     && docker-php-ext-install pdo pdo_sqlite mbstring sockets \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
+# Set default timezone (can be overridden by TZ env variable)
+ENV TZ=Europe/Berlin
+RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
+
 # Enable Apache mod_rewrite
 RUN a2enmod rewrite
 
-# Configure PHP to log errors to stderr (for docker logs)
+# Configure PHP settings
 RUN echo "error_reporting = E_ALL" >> /usr/local/etc/php/conf.d/custom.ini && \
     echo "display_errors = Off" >> /usr/local/etc/php/conf.d/custom.ini && \
     echo "log_errors = On" >> /usr/local/etc/php/conf.d/custom.ini && \
-    echo "error_log = /dev/stderr" >> /usr/local/etc/php/conf.d/custom.ini
+    echo "error_log = /dev/stderr" >> /usr/local/etc/php/conf.d/custom.ini && \
+    echo "date.timezone = Europe/Berlin" >> /usr/local/etc/php/conf.d/custom.ini
 
 # Install Composer
 COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
