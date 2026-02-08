@@ -2312,6 +2312,13 @@ class FinTSService
         $holdings = [];
         
         try {
+            // Log raw MT535 data for debugging
+            $rawMT535 = $action->getRawMT535();
+            $this->logger->info('Raw MT535 data from bank', [
+                'length' => strlen($rawMT535),
+                'data' => $rawMT535  // Log full data for debugging
+            ]);
+            
             // Get the StatementOfHoldings from the action
             $statement = $action->getStatement();
             
@@ -2360,11 +2367,15 @@ class FinTSService
                     'price_date' => $priceDate instanceof \DateTime ? $priceDate->format('Y-m-d H:i:s') : null
                 ];
                 
-                $this->logger->debug('Processed holding', [
+                $this->logger->info('Processed holding', [
                     'isin' => $isin,
+                    'wkn' => $wkn,
                     'name' => $name,
                     'quantity' => $quantity,
-                    'value' => $totalValue
+                    'currency' => $currency,
+                    'current_price' => $currentPrice,
+                    'purchase_price' => $purchasePrice,
+                    'total_value' => $totalValue
                 ]);
                 
                 $holdings[] = $holding;
