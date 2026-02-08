@@ -55,6 +55,9 @@ RUN composer install --no-dev --optimize-autoloader --no-interaction
 COPY app/patches/Fhp/Segment/WPD/*.php /var/www/html/vendor/nemiah/php-fints/lib/Fhp/Segment/WPD/
 COPY app/patches/Fhp/Action/GetDepotAufstellung.php /var/www/html/vendor/nemiah/php-fints/lib/Fhp/Action/GetDepotAufstellung.php
 
+# Regenerate autoloader to include patched classes
+RUN composer dump-autoload --optimize --no-interaction
+
 # Create data directory with proper permissions
 RUN mkdir -p /data && chown -R www-data:www-data /data && chmod 755 /data
 
