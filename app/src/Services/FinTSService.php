@@ -2435,7 +2435,7 @@ class FinTSService
                     'transactions_camt' => $this->extractFeature($bpd, 'HICAZS', [1]),
                     'balance' => $this->extractFeature($bpd, 'HISALS', [4, 5, 6, 7]),
                     'sepa_accounts' => $this->extractFeature($bpd, 'HISPAS', [1, 2, 3]),
-                    'depot' => $this->extractFeature($bpd, 'HIWPDS', [5]),
+                    'depot' => $this->extractFeature($bpd, 'HIWPDS', [5, 6]),
                 ],
                 
                 // SEPA Transfers
