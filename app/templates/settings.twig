@@ -18,6 +18,101 @@
     </div>
     {% endif %}
 
+    <!-- Cron Job Status Monitor -->
+    <div class="bg-white shadow rounded-lg mb-6" x-data="cronMonitor()" x-init="init()">
+        <div class="px-4 py-5 sm:px-6 border-b border-gray-200">
+            <div class="flex justify-between items-center">
+                <div>
+                    <h3 class="text-lg font-medium leading-6 text-gray-900">Hintergrund-Jobs Status</h3>
+                    <p class="mt-1 text-sm text-gray-500">Übersicht der automatischen Prozesse</p>
+                </div>
+                <button @click="refresh()" :disabled="loading" class="text-gray-400 hover:text-gray-600">
+                    <svg class="h-5 w-5" :class="loading ? 'animate-spin' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                    </svg>
+                </button>
+            </div>
+        </div>
+        <div class="px-4 py-5 sm:p-6">
+            <!-- Cron Daemon Status -->
+            <div class="flex items-center justify-between mb-4 pb-4 border-b border-gray-100">
+                <span class="text-sm font-medium text-gray-700">Cron-Daemon</span>
+                <div class="flex items-center gap-2">
+                    <span class="text-sm" :class="cronRunning ? 'text-green-600' : 'text-red-600'" x-text="cronRunning ? 'Läuft' : 'Gestoppt'"></span>
+                    <span class="flex h-2 w-2 relative">
+                        <span x-show="cronRunning" class="animate-ping absolute inline-flex h-full w-full rounded-full opacity-75" :class="cronRunning ? 'bg-green-400' : 'bg-red-400'"></span>
+                        <span class="relative inline-flex rounded-full h-2 w-2" :class="cronRunning ? 'bg-green-500' : 'bg-red-500'"></span>
+                    </span>
+                </div>
+            </div>
+
+            <!-- Auto-Sync Status -->
+            <div class="mb-4 pb-4 border-b border-gray-100">
+                <div class="flex items-center justify-between mb-2">
+                    <span class="text-sm font-medium text-gray-700">Auto-Sync</span>
+                    <div class="flex items-center gap-2">
+                        <span class="text-xs px-2 py-0.5 rounded-full" 
+                              :class="autoSync.enabled ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-600'"
+                              x-text="autoSync.enabled ? 'Aktiviert' : 'Deaktiviert'"></span>
+                        <span x-show="autoSync.lastStatus" class="text-xs px-2 py-0.5 rounded-full"
+                              :class="{
+                                  'bg-green-100 text-green-800': autoSync.lastStatus === 'success',
+                                  'bg-yellow-100 text-yellow-800': autoSync.lastStatus === 'partial',
+                                  'bg-red-100 text-red-800': autoSync.lastStatus === 'error'
+                              }"
+                              x-text="autoSync.lastStatus === 'success' ? 'OK' : (autoSync.lastStatus === 'partial' ? 'Teilweise' : 'Fehler')"></span>
+                    </div>
+                </div>
+                <div class="grid grid-cols-2 gap-4 text-sm">
+                    <div>
+                        <span class="text-gray-500">Letzter Lauf:</span>
+                        <span class="ml-1 text-gray-900" x-text="autoSync.lastRun || 'Noch nie'"></span>
+                    </div>
+                    <div>
+                        <span class="text-gray-500">Intervall:</span>
+                        <span class="ml-1 text-gray-900" x-text="autoSync.interval + ' Min.'"></span>
+                    </div>
+                </div>
+                <div x-show="autoSync.lastError" class="mt-2 text-xs text-red-600" x-text="autoSync.lastError"></div>
+            </div>
+
+            <!-- MQTT Publish Status -->
+            <div>
+                <div class="flex items-center justify-between mb-2">
+                    <span class="text-sm font-medium text-gray-700">MQTT Auto-Publish</span>
+                    <div class="flex items-center gap-2">
+                        <span class="text-xs px-2 py-0.5 rounded-full" 
+                              :class="mqtt.enabled ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-600'"
+                              x-text="mqtt.enabled ? 'Aktiviert' : 'Deaktiviert'"></span>
+                        <span x-show="mqtt.lastStatus" class="text-xs px-2 py-0.5 rounded-full"
+                              :class="{
+                                  'bg-green-100 text-green-800': mqtt.lastStatus === 'success',
+                                  'bg-red-100 text-red-800': mqtt.lastStatus === 'error'
+                              }"
+                              x-text="mqtt.lastStatus === 'success' ? 'OK' : 'Fehler'"></span>
+                    </div>
+                </div>
+                <div class="grid grid-cols-2 gap-4 text-sm">
+                    <div>
+                        <span class="text-gray-500">Letzter Lauf:</span>
+                        <span class="ml-1 text-gray-900" x-text="mqtt.lastRun || 'Noch nie'"></span>
+                    </div>
+                    <div>
+                        <span class="text-gray-500">Intervall:</span>
+                        <span class="ml-1 text-gray-900" x-text="mqtt.interval + ' Min.'"></span>
+                    </div>
+                </div>
+                <div x-show="mqtt.lastError" class="mt-2 text-xs text-red-600" x-text="mqtt.lastError"></div>
+            </div>
+
+            <!-- Server Time -->
+            <div class="mt-4 pt-4 border-t border-gray-100 text-xs text-gray-400 text-right">
+                Server-Zeit: <span x-text="serverTime"></span>
+                <span class="ml-2">(Auto-Refresh alle 30s)</span>
+            </div>
+        </div>
+    </div>
+
     <form method="POST" action="/settings">
         <!-- FinTS Settings -->
         <div class="bg-white shadow rounded-lg mb-6">
@@ -255,6 +350,73 @@
 </div>
 
 <script>
+function cronMonitor() {
+    return {
+        loading: false,
+        cronRunning: false,
+        serverTime: '',
+        autoSync: {
+            enabled: false,
+            interval: 30,
+            lastRun: '',
+            lastStatus: '',
+            lastError: ''
+        },
+        mqtt: {
+            enabled: false,
+            interval: 1,
+            lastRun: '',
+            lastStatus: '',
+            lastError: ''
+        },
+        refreshInterval: null,
+
+        async init() {
+            await this.refresh();
+            // Auto-refresh every 30 seconds
+            this.refreshInterval = setInterval(() => this.refresh(), 30000);
+        },
+
+        async refresh() {
+            this.loading = true;
+            try {
+                const response = await fetch('/api/cron/status');
+                const data = await response.json();
+                
+                if (data.success) {
+                    this.cronRunning = data.cron_daemon_running;
+                    this.serverTime = data.server_time;
+                    
+                    this.autoSync = {
+                        enabled: data.auto_sync.enabled,
+                        interval: data.auto_sync.interval_minutes,
+                        lastRun: data.auto_sync.last_run,
+                        lastStatus: data.auto_sync.last_status,
+                        lastError: data.auto_sync.last_error
+                    };
+                    
+                    this.mqtt = {
+                        enabled: data.mqtt_publish.enabled,
+                        interval: data.mqtt_publish.interval_minutes,
+                        lastRun: data.mqtt_publish.last_run,
+                        lastStatus: data.mqtt_publish.last_status,
+                        lastError: data.mqtt_publish.last_error
+                    };
+                }
+            } catch (error) {
+                console.error('Failed to fetch cron status:', error);
+            }
+            this.loading = false;
+        },
+
+        destroy() {
+            if (this.refreshInterval) {
+                clearInterval(this.refreshInterval);
+            }
+        }
+    };
+}
+
 function autoSyncSettings() {
     return {
         enabled: {{ settings.auto_sync_enabled == '1' ? 'true' : 'false' }},

@@ -1206,6 +1206,103 @@ class ApiController
     }
 
     /**
+     * Get comprehensive cron job status
+     */
+    public function getCronStatus(Request $request, Response $response): Response
+    {
+        // Check if cron daemon is running
+        $cronRunning = false;
+        exec('pgrep -x cron 2>/dev/null', $output, $returnCode);
+        $cronRunning = ($returnCode === 0);
+
+        // Auto-sync status
+        $autoSyncEnabled = $this->db->getSetting('auto_sync_enabled', '0') === '1';
+        $autoSyncInterval = (int) $this->db->getSetting('auto_sync_interval', '30');
+        $autoSyncLastRun = $this->db->getSetting('auto_sync_last_run', '');
+        $autoSyncLastRunTimestamp = (int) $this->db->getSetting('auto_sync_last_run_timestamp', '0');
+        $autoSyncLastStatus = $this->db->getSetting('auto_sync_last_status', 'unknown');
+        $autoSyncLastError = $this->db->getSetting('auto_sync_last_error', '');
+
+        // MQTT publish status
+        $mqttEnabled = $this->db->getSetting('mqtt_enabled', '0') === '1';
+        $mqttAutoPublishEnabled = $this->db->getSetting('mqtt_auto_publish_enabled', '1') === '1';
+        $mqttInterval = (int) $this->db->getSetting('mqtt_auto_publish_interval', '1');
+        $mqttLastPublish = $this->db->getSetting('mqtt_last_publish', '');
+        $mqttLastPublishTimestamp = (int) $this->db->getSetting('mqtt_last_publish_timestamp', '0');
+        $mqttLastStatus = $this->db->getSetting('mqtt_last_status', 'unknown');
+        $mqttLastError = $this->db->getSetting('mqtt_last_error', '');
+
+        // Calculate next run times
+        $now = time();
+        $autoSyncNextRun = null;
+        $mqttNextRun = null;
+
+        if ($autoSyncEnabled && $autoSyncLastRunTimestamp > 0) {
+            $autoSyncNextRun = $autoSyncLastRunTimestamp + ($autoSyncInterval * 60);
+            if ($autoSyncNextRun < $now) {
+                $autoSyncNextRun = $now; // Overdue
+            }
+        }
+
+        if ($mqttEnabled && $mqttAutoPublishEnabled && $mqttLastPublishTimestamp > 0) {
+            $mqttNextRun = $mqttLastPublishTimestamp + ($mqttInterval * 60);
+            if ($mqttNextRun < $now) {
+                $mqttNextRun = $now; // Overdue
+            }
+        }
+
+        // Read last few lines from log files
+        $autoSyncLog = $this->readLastLogLines('/var/log/auto-sync.log', 10);
+        $mqttLog = $this->readLastLogLines('/var/log/mqtt-publish.log', 10);
+
+        return $this->jsonResponse($response, [
+            'success' => true,
+            'cron_daemon_running' => $cronRunning,
+            'auto_sync' => [
+                'enabled' => $autoSyncEnabled,
+                'interval_minutes' => $autoSyncInterval,
+                'last_run' => $autoSyncLastRun,
+                'last_run_timestamp' => $autoSyncLastRunTimestamp,
+                'next_run_timestamp' => $autoSyncNextRun,
+                'last_status' => $autoSyncLastStatus,
+                'last_error' => $autoSyncLastError,
+                'recent_log' => $autoSyncLog
+            ],
+            'mqtt_publish' => [
+                'enabled' => $mqttEnabled && $mqttAutoPublishEnabled,
+                'mqtt_enabled' => $mqttEnabled,
+                'auto_publish_enabled' => $mqttAutoPublishEnabled,
+                'interval_minutes' => $mqttInterval,
+                'last_run' => $mqttLastPublish,
+                'last_run_timestamp' => $mqttLastPublishTimestamp,
+                'next_run_timestamp' => $mqttNextRun,
+                'last_status' => $mqttLastStatus,
+                'last_error' => $mqttLastError,
+                'recent_log' => $mqttLog
+            ],
+            'server_time' => date('d.m.Y H:i:s'),
+            'server_timestamp' => $now
+        ]);
+    }
+
+    /**
+     * Read last N lines from a log file
+     */
+    private function readLastLogLines(string $path, int $lines = 10): array
+    {
+        if (!file_exists($path) || !is_readable($path)) {
+            return [];
+        }
+
+        $content = file($path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+        if ($content === false) {
+            return [];
+        }
+
+        return array_slice($content, -$lines);
+    }
+
+    /**
      * Helper to create JSON response
      */
     private function jsonResponse(Response $response, array $data, int $status = 200): Response
