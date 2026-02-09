@@ -42,12 +42,6 @@
                     <span x-show="syncingBalances" class="loading-spinner mr-2"></span>
                     <span x-text="syncingBalances ? 'Lade...' : 'Salden aktualisieren'"></span>
                 </button>
-                <button @click="resetSession" :disabled="resettingSession"
-                        class="inline-flex items-center rounded-md bg-yellow-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-yellow-500 disabled:opacity-50"
-                        title="Löscht die gespeicherte Session und erzwingt eine neue Verbindung">
-                    <span x-show="resettingSession" class="loading-spinner mr-2"></span>
-                    <span x-text="resettingSession ? 'Setze zurück...' : 'Session zurücksetzen'"></span>
-                </button>
                 <form method="POST" action="/banks/{{ bank.id }}/delete" 
                       onsubmit="return confirm('Sind Sie sicher, dass Sie diese Bankverbindung löschen möchten?');">
                     <button type="submit" class="inline-flex items-center rounded-md bg-red-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-red-500">
@@ -825,7 +819,6 @@ function bankDetails(bankId) {
         loading: false,
         syncingBalances: false,
         syncingAll: false,
-        resettingSession: false,
         showTanModal: false,
         tanRequest: null,
         tanInput: '',
@@ -834,33 +827,6 @@ function bankDetails(bankId) {
         isDecoupled: false,
         pollingInterval: null,
         pollingStatus: '',
-
-        async resetSession() {
-            if (!confirm('Session wirklich zurücksetzen? Dies löscht die gespeicherte Verbindung und erfordert beim nächsten Abruf möglicherweise eine neue TAN-Bestätigung.')) {
-                return;
-            }
-            
-            this.resettingSession = true;
-            this.message = null;
-            
-            try {
-                const response = await fetch(`/api/banks/${this.bankId}/reset-session`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' }
-                });
-                const data = await response.json();
-                
-                if (data.success) {
-                    this.message = { type: 'success', text: data.message };
-                } else {
-                    this.message = { type: 'error', text: data.message || 'Fehler beim Zurücksetzen' };
-                }
-            } catch (error) {
-                this.message = { type: 'error', text: 'Netzwerkfehler: ' + error.message };
-            }
-            
-            this.resettingSession = false;
-        },
 
         async syncAll() {
             this.syncingAll = true;

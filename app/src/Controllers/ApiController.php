@@ -672,37 +672,6 @@ class ApiController
     }
 
     /**
-     * Reset/delete the FinTS session for a bank
-     * This forces a fresh connection with new BPD/UPD on next request
-     */
-    public function resetSession(Request $request, Response $response, array $args): Response
-    {
-        $bankId = (int) $args['id'];
-        $bank = $this->db->getBankById($bankId);
-        
-        if (!$bank) {
-            return $this->jsonResponse($response, [
-                'success' => false,
-                'message' => 'Bank nicht gefunden'
-            ], 404);
-        }
-
-        $this->db->deleteFinTSSession($bankId);
-        
-        // Also clear any session-related PHP session data
-        unset($_SESSION['fints_action_' . $bankId]);
-        unset($_SESSION['fints_sync_account_id']);
-        unset($_SESSION['fints_sync_all_bank_id']);
-        
-        $this->logger->info('FinTS session reset', ['bank_id' => $bankId, 'bank_name' => $bank['name']]);
-
-        return $this->jsonResponse($response, [
-            'success' => true,
-            'message' => 'Session zurückgesetzt. Beim nächsten Abruf werden neue Bankdaten geladen.'
-        ]);
-    }
-
-    /**
      * Get transactions for an account (from database)
      */
     public function getTransactions(Request $request, Response $response, array $args): Response
