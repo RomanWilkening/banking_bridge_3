@@ -167,10 +167,9 @@ class PayPalService
      */
     public function searchTransactions(array $credentials, ?\DateTime $startDate = null, ?\DateTime $endDate = null): array
     {
-        // Default: Last 90 days (PayPal allows up to 3 years)
+        // Default: Last 30 days
         if (!$startDate) {
-            $days = (int) $this->db->getSetting('transaction_history_days', '90');
-            $startDate = new \DateTime("-{$days} days");
+            $startDate = new \DateTime('-30 days');
         }
         if (!$endDate) {
             $endDate = new \DateTime();
@@ -267,7 +266,7 @@ class PayPalService
             );
         }
         
-        // Get transactions (configurable, default 90 days)
+        // Get transactions (last 30 days)
         $txResult = $this->searchTransactions($credentials);
         $newTransactions = 0;
         
