@@ -182,6 +182,36 @@ try {
         }
     }
     
+    // Sync PayPal accounts
+    $paypalAccounts = $db->getAllPayPalAccounts();
+    if (!empty($paypalAccounts)) {
+        $logger->info('Syncing PayPal accounts', ['count' => count($paypalAccounts)]);
+        
+        // Load PayPalService
+        $paypalService = new \App\Services\PayPalService($logger, $db);
+        
+        foreach ($paypalAccounts as $paypal) {
+            $paypalName = $paypal['name'] ?? 'PayPal';
+            try {
+                $logger->info("Syncing PayPal: {$paypalName}");
+                $result = $paypalService->syncAccount($paypal['id']);
+                
+                if ($result['success']) {
+                    $logger->info("Successfully synced PayPal {$paypalName}", [
+                        'balance' => $result['balance'] ?? null,
+                        'new_transactions' => $result['transactions_new'] ?? 0
+                    ]);
+                } else {
+                    $logger->warning("PayPal sync returned failure for {$paypalName}");
+                    $totalStats['errors'][] = 'PayPal: ' . $paypalName;
+                }
+            } catch (\Throwable $e) {
+                $logger->error("PayPal sync error for {$paypalName}: " . $e->getMessage());
+                $totalStats['errors'][] = 'PayPal: ' . $paypalName;
+            }
+        }
+    }
+    
     // Update timestamps and status
     $db->setSetting('auto_sync_last_run', date('d.m.Y H:i'));
     $db->setSetting('auto_sync_last_run_timestamp', (string) time());
