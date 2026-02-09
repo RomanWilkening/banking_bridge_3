@@ -7,7 +7,7 @@ use App\Services\DatabaseService;
 use App\Services\PayPalService;
 use Psr\Http\Message\ResponseInterface as Response;
 use Psr\Http\Message\ServerRequestInterface as Request;
-use Monolog\Logger;
+use Psr\Log\LoggerInterface;
 use Slim\Views\Twig;
 
 class PayPalController
@@ -15,9 +15,9 @@ class PayPalController
     private Twig $view;
     private DatabaseService $db;
     private PayPalService $paypal;
-    private Logger $logger;
+    private LoggerInterface $logger;
     
-    public function __construct(Twig $view, DatabaseService $db, PayPalService $paypal, Logger $logger)
+    public function __construct(Twig $view, DatabaseService $db, PayPalService $paypal, LoggerInterface $logger)
     {
         $this->view = $view;
         $this->db = $db;
