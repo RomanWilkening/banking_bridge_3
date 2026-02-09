@@ -44,7 +44,7 @@ return [
         $logger = $container->get(Logger::class);
         $db = $container->get(DatabaseService::class);
         
-        $service = new FinTSService($logger, $db);
+        $service = new FinTSService($logger);
         $service->setProductId($db->getSetting('fints_product_id'));
         
         return $service;

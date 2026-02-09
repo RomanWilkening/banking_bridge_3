@@ -1,7 +1,7 @@
 {% extends "layout.twig" %}
 
 {% block content %}
-<div x-data="accountDetails({{ account.id }}, {{ account.bank_id }}, {{ transactions|json_encode|e('html_attr') }})" class="space-y-6">
+<div x-data="accountDetails({{ account.id }}, {{ account.bank_id }})" class="space-y-6">
     <!-- Account Header -->
     <div class="bg-white shadow rounded-lg overflow-hidden">
         <div class="px-4 py-5 sm:px-6 flex justify-between items-center border-b border-gray-200">
@@ -41,110 +41,15 @@
             </div>
         </div>
         
-        <div class="px-4 py-3 bg-gray-50 flex justify-between items-center flex-wrap gap-2">
+        <div class="px-4 py-3 bg-gray-50 flex justify-between items-center">
             <div>
                 <span class="text-sm text-gray-500">{{ pagination.total_items }} Transaktionen gespeichert</span>
             </div>
-            <div class="flex gap-2">
-                <button @click="showImportModal = true"
-                        class="inline-flex items-center rounded-md bg-gray-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-gray-500">
-                    <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/>
-                    </svg>
-                    Historischen Import
-                </button>
-                <button @click="syncTransactions" :disabled="syncing"
-                        class="inline-flex items-center rounded-md bg-primary-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-primary-500 disabled:opacity-50">
-                    <span x-show="syncing" class="loading-spinner mr-2"></span>
-                    <span x-text="syncing ? 'Synchronisiere...' : 'Transaktionen abrufen'"></span>
-                </button>
-            </div>
-        </div>
-    </div>
-
-    <!-- Import Modal -->
-    <div x-show="showImportModal" x-cloak 
-         class="fixed inset-0 z-50 overflow-y-auto" 
-         aria-labelledby="import-modal-title" role="dialog" aria-modal="true">
-        <div class="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
-            <div class="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity" @click="showImportModal = false"></div>
-            <span class="hidden sm:inline-block sm:align-middle sm:h-screen">&#8203;</span>
-            <div class="inline-block align-bottom bg-white rounded-lg px-4 pt-5 pb-4 text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full sm:p-6">
-                <div>
-                    <div class="mx-auto flex items-center justify-center h-12 w-12 rounded-full bg-blue-100">
-                        <span class="text-2xl">📥</span>
-                    </div>
-                    <div class="mt-3 text-center sm:mt-5">
-                        <h3 class="text-lg leading-6 font-medium text-gray-900">Historischen Import durchführen</h3>
-                        <p class="mt-2 text-sm text-gray-500">
-                            Wählen Sie den Zeitraum für den Import. Bei längeren Zeiträumen kann eine TAN erforderlich sein.
-                        </p>
-                    </div>
-                    
-                    <div class="mt-6 space-y-4">
-                        <!-- Quick Select Buttons -->
-                        <div class="flex flex-wrap gap-2 justify-center">
-                            <button type="button" @click="setImportRange(90)" 
-                                    class="px-3 py-1 text-sm rounded-full border border-gray-300 hover:bg-gray-100"
-                                    :class="importDays === 90 ? 'bg-primary-100 border-primary-500' : ''">
-                                90 Tage
-                            </button>
-                            <button type="button" @click="setImportRange(180)" 
-                                    class="px-3 py-1 text-sm rounded-full border border-gray-300 hover:bg-gray-100"
-                                    :class="importDays === 180 ? 'bg-primary-100 border-primary-500' : ''">
-                                6 Monate
-                            </button>
-                            <button type="button" @click="setImportRange(365)" 
-                                    class="px-3 py-1 text-sm rounded-full border border-gray-300 hover:bg-gray-100"
-                                    :class="importDays === 365 ? 'bg-primary-100 border-primary-500' : ''">
-                                1 Jahr
-                            </button>
-                            <button type="button" @click="setImportRange(730)" 
-                                    class="px-3 py-1 text-sm rounded-full border border-gray-300 hover:bg-gray-100"
-                                    :class="importDays === 730 ? 'bg-primary-100 border-primary-500' : ''">
-                                2 Jahre
-                            </button>
-                            <button type="button" @click="setImportRange(1095)" 
-                                    class="px-3 py-1 text-sm rounded-full border border-gray-300 hover:bg-gray-100"
-                                    :class="importDays === 1095 ? 'bg-primary-100 border-primary-500' : ''">
-                                3 Jahre
-                            </button>
-                        </div>
-                        
-                        <!-- Custom Date Range -->
-                        <div class="grid grid-cols-2 gap-4">
-                            <div>
-                                <label class="block text-sm font-medium text-gray-700 mb-1">Von</label>
-                                <input type="date" x-model="importFrom" 
-                                       class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm border px-3 py-2">
-                            </div>
-                            <div>
-                                <label class="block text-sm font-medium text-gray-700 mb-1">Bis</label>
-                                <input type="date" x-model="importTo" 
-                                       class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm border px-3 py-2">
-                            </div>
-                        </div>
-                        
-                        <div class="bg-yellow-50 border border-yellow-200 rounded-md p-3">
-                            <p class="text-sm text-yellow-800">
-                                <strong>Hinweis:</strong> Bei Zeiträumen über 90 Tage ist meist eine TAN-Bestätigung erforderlich. 
-                                Die verfügbare Historie hängt von Ihrer Bank ab (oft 1-3 Jahre).
-                            </p>
-                        </div>
-                    </div>
-                </div>
-                <div class="mt-5 sm:mt-6 flex gap-3">
-                    <button type="button" @click="startHistoricalImport" :disabled="importing"
-                            class="flex-1 inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-primary-600 text-base font-medium text-white hover:bg-primary-700 sm:text-sm disabled:opacity-50">
-                        <span x-show="importing" class="loading-spinner mr-2"></span>
-                        <span x-text="importing ? 'Importiere...' : 'Import starten'"></span>
-                    </button>
-                    <button type="button" @click="showImportModal = false"
-                            class="flex-1 inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 sm:text-sm">
-                        Abbrechen
-                    </button>
-                </div>
-            </div>
+            <button @click="syncTransactions" :disabled="syncing"
+                    class="inline-flex items-center rounded-md bg-primary-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-primary-500 disabled:opacity-50">
+                <span x-show="syncing" class="loading-spinner mr-2"></span>
+                <span x-text="syncing ? 'Synchronisiere...' : 'Transaktionen abrufen'"></span>
+            </button>
         </div>
     </div>
 
@@ -223,233 +128,97 @@
         </div>
     </div>
 
-    <!-- Transactions List with Filters -->
+    <!-- Transactions List -->
     <div class="bg-white shadow rounded-lg">
         <div class="px-4 py-5 sm:px-6 border-b border-gray-200">
-            <div class="flex justify-between items-center flex-wrap gap-4">
-                <h3 class="text-lg font-medium leading-6 text-gray-900">Transaktionen</h3>
-                
-                <!-- Load All Button -->
-                <div class="flex items-center gap-2">
-                    <template x-if="!allLoaded && {{ pagination.total_items }} > {{ transactions|length }}">
-                        <button @click="loadAllTransactions" :disabled="loadingAll"
-                                class="text-sm text-primary-600 hover:text-primary-500 flex items-center">
-                            <span x-show="loadingAll" class="loading-spinner mr-1" style="width: 14px; height: 14px;"></span>
-                            <span x-text="loadingAll ? 'Lade...' : 'Alle {{ pagination.total_items }} laden'"></span>
-                        </button>
-                    </template>
-                    <span x-show="allLoaded" class="text-sm text-green-600">✓ Alle geladen</span>
-                </div>
+            <h3 class="text-lg font-medium leading-6 text-gray-900">Transaktionen</h3>
+        </div>
+        
+        {% if transactions|length > 0 %}
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-gray-200">
+                <thead class="bg-gray-50">
+                    <tr>
+                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Datum</th>
+                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Empfänger/Auftraggeber</th>
+                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Verwendungszweck</th>
+                        <th scope="col" class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Betrag</th>
+                    </tr>
+                </thead>
+                <tbody class="bg-white divide-y divide-gray-200">
+                    {% for tx in transactions %}
+                    <tr class="hover:bg-gray-50">
+                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                            {{ tx.booking_date|date('d.m.Y') }}
+                        </td>
+                        <td class="px-6 py-4 text-sm text-gray-900">
+                            <div class="font-medium">{{ tx.name ?? '-' }}</div>
+                            {% if tx.iban %}
+                            <div class="text-xs text-gray-400">{{ tx.iban }}</div>
+                            {% endif %}
+                        </td>
+                        <td class="px-6 py-4 text-sm text-gray-500">
+                            <div class="max-w-xs truncate" title="{{ tx.description }}">{{ tx.description ?? tx.booking_text ?? '-' }}</div>
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm text-right font-medium {% if tx.amount >= 0 %}text-green-600{% else %}text-red-600{% endif %}">
+                            {{ tx.amount|number_format(2, ',', '.') }} {{ tx.currency }}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Pagination -->
+        {% if pagination.total_pages > 1 %}
+        <div class="px-4 py-3 border-t border-gray-200 flex items-center justify-between">
+            <div class="flex-1 flex justify-between sm:hidden">
+                {% if pagination.has_prev %}
+                <a href="?page={{ pagination.current_page - 1 }}" class="relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50">
+                    Zurück
+                </a>
+                {% endif %}
+                {% if pagination.has_next %}
+                <a href="?page={{ pagination.current_page + 1 }}" class="ml-3 relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50">
+                    Weiter
+                </a>
+                {% endif %}
             </div>
-            
-            <!-- Filter Section -->
-            <div class="mt-4 space-y-3">
-                <!-- Search -->
-                <div class="relative">
-                    <input type="text" x-model="filters.search" @input="applyFilters" placeholder="Suche nach Name, IBAN, Verwendungszweck..."
-                           class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm border px-3 py-2 pl-10">
-                    <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                        <svg class="h-5 w-5 text-gray-400" viewBox="0 0 20 20" fill="currentColor">
-                            <path fill-rule="evenodd" d="M9 3.5a5.5 5.5 0 100 11 5.5 5.5 0 000-11zM2 9a7 7 0 1112.452 4.391l3.328 3.329a.75.75 0 11-1.06 1.06l-3.329-3.328A7 7 0 012 9z" clip-rule="evenodd" />
-                        </svg>
-                    </div>
-                    <button x-show="filters.search" @click="filters.search = ''; applyFilters()" 
-                            class="absolute inset-y-0 right-0 pr-3 flex items-center text-gray-400 hover:text-gray-600">
-                        <svg class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                            <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.28 7.22a.75.75 0 00-1.06 1.06L8.94 10l-1.72 1.72a.75.75 0 101.06 1.06L10 11.06l1.72 1.72a.75.75 0 101.06-1.06L11.06 10l1.72-1.72a.75.75 0 00-1.06-1.06L10 8.94 8.28 7.22z" clip-rule="evenodd" />
-                        </svg>
-                    </button>
+            <div class="hidden sm:flex-1 sm:flex sm:items-center sm:justify-between">
+                <div>
+                    <p class="text-sm text-gray-700">
+                        Seite <span class="font-medium">{{ pagination.current_page }}</span> von <span class="font-medium">{{ pagination.total_pages }}</span>
+                    </p>
                 </div>
-                
-                <!-- Advanced Filters Toggle -->
-                <button @click="showAdvancedFilters = !showAdvancedFilters" 
-                        class="text-sm text-gray-600 hover:text-gray-900 flex items-center">
-                    <svg class="w-4 h-4 mr-1 transition-transform" :class="showAdvancedFilters ? 'rotate-180' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
-                    </svg>
-                    Erweiterte Filter
-                    <span x-show="activeFilterCount > 0" class="ml-2 bg-primary-100 text-primary-800 text-xs px-2 py-0.5 rounded-full" x-text="activeFilterCount + ' aktiv'"></span>
-                </button>
-                
-                <!-- Advanced Filters -->
-                <div x-show="showAdvancedFilters" x-collapse class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 pt-2">
-                    <!-- Date Range -->
-                    <div>
-                        <label class="block text-xs font-medium text-gray-500 mb-1">Von Datum</label>
-                        <input type="date" x-model="filters.dateFrom" @change="applyFilters"
-                               class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm border px-3 py-2">
-                    </div>
-                    <div>
-                        <label class="block text-xs font-medium text-gray-500 mb-1">Bis Datum</label>
-                        <input type="date" x-model="filters.dateTo" @change="applyFilters"
-                               class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm border px-3 py-2">
-                    </div>
-                    
-                    <!-- Amount Range -->
-                    <div>
-                        <label class="block text-xs font-medium text-gray-500 mb-1">Min. Betrag (€)</label>
-                        <input type="number" step="0.01" x-model="filters.amountMin" @input="applyFilters" placeholder="-100"
-                               class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm border px-3 py-2">
-                    </div>
-                    <div>
-                        <label class="block text-xs font-medium text-gray-500 mb-1">Max. Betrag (€)</label>
-                        <input type="number" step="0.01" x-model="filters.amountMax" @input="applyFilters" placeholder="1000"
-                               class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm border px-3 py-2">
-                    </div>
-                    
-                    <!-- Type Filter -->
-                    <div class="sm:col-span-2 lg:col-span-4">
-                        <label class="block text-xs font-medium text-gray-500 mb-2">Transaktionstyp</label>
-                        <div class="flex gap-4">
-                            <label class="inline-flex items-center">
-                                <input type="radio" x-model="filters.type" value="all" @change="applyFilters"
-                                       class="form-radio h-4 w-4 text-primary-600 border-gray-300 focus:ring-primary-500">
-                                <span class="ml-2 text-sm text-gray-700">Alle</span>
-                            </label>
-                            <label class="inline-flex items-center">
-                                <input type="radio" x-model="filters.type" value="income" @change="applyFilters"
-                                       class="form-radio h-4 w-4 text-green-600 border-gray-300 focus:ring-green-500">
-                                <span class="ml-2 text-sm text-gray-700">Eingänge</span>
-                            </label>
-                            <label class="inline-flex items-center">
-                                <input type="radio" x-model="filters.type" value="expense" @change="applyFilters"
-                                       class="form-radio h-4 w-4 text-red-600 border-gray-300 focus:ring-red-500">
-                                <span class="ml-2 text-sm text-gray-700">Ausgänge</span>
-                            </label>
-                        </div>
-                    </div>
-                </div>
-                
-                <!-- Reset Filters -->
-                <div x-show="activeFilterCount > 0" class="flex justify-between items-center pt-2 border-t border-gray-100">
-                    <span class="text-sm text-gray-500">
-                        <span x-text="filteredTransactions.length"></span> von <span x-text="allTransactions.length"></span> Transaktionen
-                        <template x-if="filteredSum !== null">
-                            <span class="ml-2">
-                                | Summe: <span :class="filteredSum >= 0 ? 'text-green-600' : 'text-red-600'" x-text="formatCurrency(filteredSum)"></span>
-                            </span>
-                        </template>
-                    </span>
-                    <button @click="resetFilters" class="text-sm text-red-600 hover:text-red-500">
-                        Filter zurücksetzen
-                    </button>
+                <div>
+                    <nav class="relative z-0 inline-flex rounded-md shadow-sm -space-x-px" aria-label="Pagination">
+                        {% if pagination.has_prev %}
+                        <a href="?page={{ pagination.current_page - 1 }}" class="relative inline-flex items-center px-2 py-2 rounded-l-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50">
+                            <svg class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                                <path fill-rule="evenodd" d="M12.707 5.293a1 1 0 010 1.414L9.414 10l3.293 3.293a1 1 0 01-1.414 1.414l-4-4a1 1 0 010-1.414l4-4a1 1 0 011.414 0z" clip-rule="evenodd" />
+                            </svg>
+                        </a>
+                        {% endif %}
+                        {% if pagination.has_next %}
+                        <a href="?page={{ pagination.current_page + 1 }}" class="relative inline-flex items-center px-2 py-2 rounded-r-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50">
+                            <svg class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                                <path fill-rule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clip-rule="evenodd" />
+                            </svg>
+                        </a>
+                        {% endif %}
+                    </nav>
                 </div>
             </div>
         </div>
-        
-        <template x-if="filteredTransactions.length > 0">
-            <div>
-                <div class="overflow-x-auto">
-                    <table class="min-w-full divide-y divide-gray-200">
-                        <thead class="bg-gray-50">
-                            <tr>
-                                <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
-                                    @click="sortBy('booking_date')">
-                                    <div class="flex items-center">
-                                        Datum
-                                        <span x-show="sortField === 'booking_date'" class="ml-1" x-text="sortDir === 'asc' ? '↑' : '↓'"></span>
-                                    </div>
-                                </th>
-                                <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
-                                    @click="sortBy('name')">
-                                    <div class="flex items-center">
-                                        Empfänger/Auftraggeber
-                                        <span x-show="sortField === 'name'" class="ml-1" x-text="sortDir === 'asc' ? '↑' : '↓'"></span>
-                                    </div>
-                                </th>
-                                <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Verwendungszweck</th>
-                                <th scope="col" class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
-                                    @click="sortBy('amount')">
-                                    <div class="flex items-center justify-end">
-                                        Betrag
-                                        <span x-show="sortField === 'amount'" class="ml-1" x-text="sortDir === 'asc' ? '↑' : '↓'"></span>
-                                    </div>
-                                </th>
-                            </tr>
-                        </thead>
-                        <tbody class="bg-white divide-y divide-gray-200">
-                            <template x-for="tx in paginatedTransactions" :key="tx.id">
-                                <tr class="hover:bg-gray-50">
-                                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500" x-text="formatDate(tx.booking_date)"></td>
-                                    <td class="px-6 py-4 text-sm text-gray-900">
-                                        <div class="font-medium" x-text="tx.name || '-'"></div>
-                                        <div x-show="tx.iban" class="text-xs text-gray-400" x-text="tx.iban"></div>
-                                    </td>
-                                    <td class="px-6 py-4 text-sm text-gray-500">
-                                        <div class="max-w-xs truncate" :title="tx.description" x-text="tx.description || tx.booking_text || '-'"></div>
-                                    </td>
-                                    <td class="px-6 py-4 whitespace-nowrap text-sm text-right font-medium"
-                                        :class="tx.amount >= 0 ? 'text-green-600' : 'text-red-600'"
-                                        x-text="formatCurrency(tx.amount)"></td>
-                                </tr>
-                            </template>
-                        </tbody>
-                    </table>
-                </div>
+        {% endif %}
 
-                <!-- Client-side Pagination -->
-                <div x-show="totalPages > 1" class="px-4 py-3 border-t border-gray-200 flex items-center justify-between">
-                    <div class="flex-1 flex justify-between sm:hidden">
-                        <button @click="currentPage--" :disabled="currentPage === 1"
-                                class="relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50">
-                            Zurück
-                        </button>
-                        <button @click="currentPage++" :disabled="currentPage >= totalPages"
-                                class="ml-3 relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50">
-                            Weiter
-                        </button>
-                    </div>
-                    <div class="hidden sm:flex-1 sm:flex sm:items-center sm:justify-between">
-                        <div>
-                            <p class="text-sm text-gray-700">
-                                Seite <span class="font-medium" x-text="currentPage"></span> von <span class="font-medium" x-text="totalPages"></span>
-                                (<span x-text="filteredTransactions.length"></span> Transaktionen)
-                            </p>
-                        </div>
-                        <div class="flex items-center gap-2">
-                            <label class="text-sm text-gray-500">Pro Seite:</label>
-                            <select x-model.number="perPage" @change="currentPage = 1" class="rounded-md border-gray-300 text-sm py-1">
-                                <option value="25">25</option>
-                                <option value="50">50</option>
-                                <option value="100">100</option>
-                                <option value="250">250</option>
-                            </select>
-                            <nav class="relative z-0 inline-flex rounded-md shadow-sm -space-x-px ml-4" aria-label="Pagination">
-                                <button @click="currentPage--" :disabled="currentPage === 1"
-                                        class="relative inline-flex items-center px-2 py-2 rounded-l-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50 disabled:opacity-50">
-                                    <svg class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                                        <path fill-rule="evenodd" d="M12.707 5.293a1 1 0 010 1.414L9.414 10l3.293 3.293a1 1 0 01-1.414 1.414l-4-4a1 1 0 010-1.414l4-4a1 1 0 011.414 0z" clip-rule="evenodd" />
-                                    </svg>
-                                </button>
-                                <button @click="currentPage++" :disabled="currentPage >= totalPages"
-                                        class="relative inline-flex items-center px-2 py-2 rounded-r-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50 disabled:opacity-50">
-                                    <svg class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                                        <path fill-rule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clip-rule="evenodd" />
-                                    </svg>
-                                </button>
-                            </nav>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </template>
-
-        <template x-if="filteredTransactions.length === 0 && allTransactions.length > 0">
-            <div class="px-4 py-12 text-center">
-                <span class="text-4xl">🔍</span>
-                <p class="mt-2 text-sm text-gray-500">Keine Transaktionen gefunden</p>
-                <p class="text-sm text-gray-400">Passen Sie die Filter an oder setzen Sie sie zurück</p>
-                <button @click="resetFilters" class="mt-3 text-sm text-primary-600 hover:text-primary-500">Filter zurücksetzen</button>
-            </div>
-        </template>
-
-        <template x-if="allTransactions.length === 0">
-            <div class="px-4 py-12 text-center">
-                <span class="text-4xl">📋</span>
-                <p class="mt-2 text-sm text-gray-500">Noch keine Transaktionen</p>
-                <p class="text-sm text-gray-400">Klicken Sie auf "Transaktionen abrufen" oder "Historischen Import" um Umsätze zu laden</p>
-            </div>
-        </template>
+        {% else %}
+        <div class="px-4 py-12 text-center">
+            <span class="text-4xl">📋</span>
+            <p class="mt-2 text-sm text-gray-500">Noch keine Transaktionen</p>
+            <p class="text-sm text-gray-400">Klicken Sie auf "Transaktionen abrufen" um die Umsätze von der Bank zu laden</p>
+        </div>
+        {% endif %}
     </div>
 
     <!-- Back Link -->
@@ -511,7 +280,7 @@ function editableName(type, id, initialName) {
     };
 }
 
-function accountDetails(accountId, bankId, initialTransactions) {
+function accountDetails(accountId, bankId) {
     return {
         accountId: accountId,
         bankId: bankId,
@@ -523,226 +292,6 @@ function accountDetails(accountId, bankId, initialTransactions) {
         isDecoupled: false,
         pollingInterval: null,
         message: null,
-        
-        // Import Modal
-        showImportModal: false,
-        importing: false,
-        importFrom: '',
-        importTo: new Date().toISOString().split('T')[0],
-        importDays: 365,
-        
-        // Transactions & Filtering
-        allTransactions: initialTransactions || [],
-        filteredTransactions: [],
-        allLoaded: false,
-        loadingAll: false,
-        
-        // Filters
-        filters: {
-            search: '',
-            dateFrom: '',
-            dateTo: '',
-            amountMin: '',
-            amountMax: '',
-            type: 'all'
-        },
-        showAdvancedFilters: false,
-        
-        // Sorting
-        sortField: 'booking_date',
-        sortDir: 'desc',
-        
-        // Pagination
-        currentPage: 1,
-        perPage: 50,
-        
-        init() {
-            this.setImportRange(365);
-            this.applyFilters();
-        },
-        
-        get activeFilterCount() {
-            let count = 0;
-            if (this.filters.search) count++;
-            if (this.filters.dateFrom) count++;
-            if (this.filters.dateTo) count++;
-            if (this.filters.amountMin !== '') count++;
-            if (this.filters.amountMax !== '') count++;
-            if (this.filters.type !== 'all') count++;
-            return count;
-        },
-        
-        get filteredSum() {
-            if (this.activeFilterCount === 0) return null;
-            return this.filteredTransactions.reduce((sum, tx) => sum + parseFloat(tx.amount), 0);
-        },
-        
-        get totalPages() {
-            return Math.ceil(this.filteredTransactions.length / this.perPage);
-        },
-        
-        get paginatedTransactions() {
-            const start = (this.currentPage - 1) * this.perPage;
-            return this.filteredTransactions.slice(start, start + this.perPage);
-        },
-        
-        setImportRange(days) {
-            this.importDays = days;
-            const from = new Date();
-            from.setDate(from.getDate() - days);
-            this.importFrom = from.toISOString().split('T')[0];
-            this.importTo = new Date().toISOString().split('T')[0];
-        },
-        
-        applyFilters() {
-            let result = [...this.allTransactions];
-            
-            // Text search
-            if (this.filters.search) {
-                const search = this.filters.search.toLowerCase();
-                result = result.filter(tx => 
-                    (tx.name && tx.name.toLowerCase().includes(search)) ||
-                    (tx.iban && tx.iban.toLowerCase().includes(search)) ||
-                    (tx.description && tx.description.toLowerCase().includes(search)) ||
-                    (tx.booking_text && tx.booking_text.toLowerCase().includes(search))
-                );
-            }
-            
-            // Date filters
-            if (this.filters.dateFrom) {
-                result = result.filter(tx => tx.booking_date >= this.filters.dateFrom);
-            }
-            if (this.filters.dateTo) {
-                result = result.filter(tx => tx.booking_date <= this.filters.dateTo);
-            }
-            
-            // Amount filters
-            if (this.filters.amountMin !== '') {
-                const min = parseFloat(this.filters.amountMin);
-                result = result.filter(tx => parseFloat(tx.amount) >= min);
-            }
-            if (this.filters.amountMax !== '') {
-                const max = parseFloat(this.filters.amountMax);
-                result = result.filter(tx => parseFloat(tx.amount) <= max);
-            }
-            
-            // Type filter
-            if (this.filters.type === 'income') {
-                result = result.filter(tx => parseFloat(tx.amount) >= 0);
-            } else if (this.filters.type === 'expense') {
-                result = result.filter(tx => parseFloat(tx.amount) < 0);
-            }
-            
-            // Sort
-            result.sort((a, b) => {
-                let aVal = a[this.sortField];
-                let bVal = b[this.sortField];
-                
-                if (this.sortField === 'amount') {
-                    aVal = parseFloat(aVal);
-                    bVal = parseFloat(bVal);
-                }
-                
-                if (aVal < bVal) return this.sortDir === 'asc' ? -1 : 1;
-                if (aVal > bVal) return this.sortDir === 'asc' ? 1 : -1;
-                return 0;
-            });
-            
-            this.filteredTransactions = result;
-            this.currentPage = 1;
-        },
-        
-        sortBy(field) {
-            if (this.sortField === field) {
-                this.sortDir = this.sortDir === 'asc' ? 'desc' : 'asc';
-            } else {
-                this.sortField = field;
-                this.sortDir = field === 'booking_date' ? 'desc' : 'asc';
-            }
-            this.applyFilters();
-        },
-        
-        resetFilters() {
-            this.filters = {
-                search: '',
-                dateFrom: '',
-                dateTo: '',
-                amountMin: '',
-                amountMax: '',
-                type: 'all'
-            };
-            this.applyFilters();
-        },
-        
-        formatDate(dateStr) {
-            if (!dateStr) return '-';
-            const d = new Date(dateStr);
-            return d.toLocaleDateString('de-DE');
-        },
-        
-        formatCurrency(amount) {
-            return parseFloat(amount).toLocaleString('de-DE', { 
-                style: 'currency', 
-                currency: 'EUR' 
-            });
-        },
-        
-        async loadAllTransactions() {
-            this.loadingAll = true;
-            try {
-                const response = await fetch(`/api/accounts/${this.accountId}/transactions?all=1`);
-                const data = await response.json();
-                if (data.success) {
-                    this.allTransactions = data.transactions;
-                    this.allLoaded = true;
-                    this.applyFilters();
-                }
-            } catch (error) {
-                console.error('Error loading all transactions:', error);
-            }
-            this.loadingAll = false;
-        },
-        
-        async startHistoricalImport() {
-            this.importing = true;
-            this.message = null;
-            
-            try {
-                const response = await fetch(`/api/accounts/${this.accountId}/sync`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        from: this.importFrom,
-                        to: this.importTo
-                    })
-                });
-                const data = await response.json();
-                
-                this.showImportModal = false;
-                
-                if (data.needs_tan) {
-                    this.tanRequest = data.tan_request;
-                    this.isDecoupled = data.tan_request?.is_decoupled || false;
-                    this.showTanModal = true;
-                    
-                    if (this.isDecoupled) {
-                        this.startDecoupledPolling();
-                    }
-                } else if (data.success) {
-                    const msg = data.new_count > 0 
-                        ? `${data.new_count} neue Transaktionen importiert, ${data.updated_count} aktualisiert`
-                        : `${data.count} Transaktionen geprüft (keine neuen)`;
-                    this.message = { type: 'success', text: msg };
-                    setTimeout(() => location.reload(), 1500);
-                } else {
-                    this.message = { type: 'error', text: data.message || 'Fehler beim Import' };
-                }
-            } catch (error) {
-                this.message = { type: 'error', text: 'Netzwerkfehler: ' + error.message };
-            }
-            
-            this.importing = false;
-        },
 
         async syncTransactions() {
             this.syncing = true;
@@ -753,7 +302,11 @@ function accountDetails(accountId, bankId, initialTransactions) {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
-                    }
+                    },
+                    body: JSON.stringify({
+                        from: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+                        to: new Date().toISOString().split('T')[0]
+                    })
                 });
                 const data = await response.json();
 
@@ -842,11 +395,8 @@ function accountDetails(accountId, bankId, initialTransactions) {
                     }
                 } else if (data.success) {
                     this.showTanModal = false;
-                    const msg = data.new_count > 0 
-                        ? `${data.new_count} neue Transaktionen, ${data.updated_count} aktualisiert`
-                        : `${data.count || 0} Transaktionen geprüft`;
-                    this.message = { type: 'success', text: msg };
-                    setTimeout(() => location.reload(), 1500);
+                    // After TAN, try syncing again
+                    this.syncTransactions();
                 } else {
                     this.message = { type: 'error', text: data.message || 'TAN-Fehler' };
                     this.showTanModal = false;
