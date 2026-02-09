@@ -170,6 +170,23 @@
                         </p>
                     </div>
                 </div>
+                
+                <div>
+                    <label for="transaction_history_days" class="block text-sm font-medium text-gray-700">Transaktionshistorie (Tage)</label>
+                    <select name="transaction_history_days" id="transaction_history_days"
+                            class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm border px-3 py-2">
+                        <option value="30" {{ settings.transaction_history_days == '30' ? 'selected' : '' }}>30 Tage</option>
+                        <option value="60" {{ settings.transaction_history_days == '60' ? 'selected' : '' }}>60 Tage</option>
+                        <option value="90" {{ settings.transaction_history_days == '90' or settings.transaction_history_days == '' ? 'selected' : '' }}>90 Tage (Standard)</option>
+                        <option value="180" {{ settings.transaction_history_days == '180' ? 'selected' : '' }}>180 Tage (6 Monate)</option>
+                        <option value="365" {{ settings.transaction_history_days == '365' ? 'selected' : '' }}>365 Tage (1 Jahr)</option>
+                        <option value="730" {{ settings.transaction_history_days == '730' ? 'selected' : '' }}>730 Tage (2 Jahre)</option>
+                        <option value="1095" {{ settings.transaction_history_days == '1095' ? 'selected' : '' }}>1095 Tage (3 Jahre, nur PayPal)</option>
+                    </select>
+                    <p class="mt-2 text-sm text-gray-500">
+                        Zeitraum für den Abruf der Transaktionshistorie. 90 Tage ist der PSD2-konforme Standard für Banken. PayPal erlaubt bis zu 3 Jahre.
+                    </p>
+                </div>
             </div>
         </div>
 

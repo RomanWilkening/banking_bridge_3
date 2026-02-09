@@ -1,7 +1,7 @@
 {% extends "layout.twig" %}
 
 {% block content %}
-<div class="max-w-7xl mx-auto" x-data="paypalAccount()">
+<div class="max-w-7xl mx-auto" x-data="paypalAccount({{ transactions|json_encode|e('html_attr') }})">
     <div class="mb-6">
         <a href="/paypal" class="text-sm text-gray-500 hover:text-gray-700 flex items-center">
             <svg class="mr-1 h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -79,89 +79,429 @@
         </div>
     </div>
 
-    <!-- Transactions -->
+    <!-- Transactions with Filters -->
     <div class="bg-white rounded-lg shadow">
         <div class="px-6 py-4 border-b border-gray-200">
-            <h2 class="text-lg font-medium text-gray-900">
-                Transaktionen
-                <span class="text-sm font-normal text-gray-500">({{ transaction_count }} gesamt)</span>
-            </h2>
+            <div class="flex justify-between items-center flex-wrap gap-4">
+                <h2 class="text-lg font-medium text-gray-900">
+                    Transaktionen
+                    <span class="text-sm font-normal text-gray-500">(<span x-text="filteredTransactions.length"></span> von {{ transaction_count }})</span>
+                </h2>
+            </div>
+            
+            <!-- Filter Section -->
+            <div class="mt-4 space-y-3">
+                <!-- Search -->
+                <div class="relative">
+                    <input type="text" x-model="filters.search" @input="applyFilters" placeholder="Suche nach Name, E-Mail, Betreff, Typ..."
+                           class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm border px-3 py-2 pl-10">
+                    <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                        <svg class="h-5 w-5 text-gray-400" viewBox="0 0 20 20" fill="currentColor">
+                            <path fill-rule="evenodd" d="M9 3.5a5.5 5.5 0 100 11 5.5 5.5 0 000-11zM2 9a7 7 0 1112.452 4.391l3.328 3.329a.75.75 0 11-1.06 1.06l-3.329-3.328A7 7 0 012 9z" clip-rule="evenodd" />
+                        </svg>
+                    </div>
+                    <button x-show="filters.search" @click="filters.search = ''; applyFilters()" 
+                            class="absolute inset-y-0 right-0 pr-3 flex items-center text-gray-400 hover:text-gray-600">
+                        <svg class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                            <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.28 7.22a.75.75 0 00-1.06 1.06L8.94 10l-1.72 1.72a.75.75 0 101.06 1.06L10 11.06l1.72 1.72a.75.75 0 101.06-1.06L11.06 10l1.72-1.72a.75.75 0 00-1.06-1.06L10 8.94 8.28 7.22z" clip-rule="evenodd" />
+                        </svg>
+                    </button>
+                </div>
+                
+                <!-- Advanced Filters Toggle -->
+                <button @click="showAdvancedFilters = !showAdvancedFilters" 
+                        class="text-sm text-gray-600 hover:text-gray-900 flex items-center">
+                    <svg class="w-4 h-4 mr-1 transition-transform" :class="showAdvancedFilters ? 'rotate-180' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+                    </svg>
+                    Erweiterte Filter
+                    <span x-show="activeFilterCount > 0" class="ml-2 bg-primary-100 text-primary-800 text-xs px-2 py-0.5 rounded-full" x-text="activeFilterCount + ' aktiv'"></span>
+                </button>
+                
+                <!-- Advanced Filters -->
+                <div x-show="showAdvancedFilters" x-collapse class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 pt-2">
+                    <!-- Date Range -->
+                    <div>
+                        <label class="block text-xs font-medium text-gray-500 mb-1">Von Datum</label>
+                        <input type="date" x-model="filters.dateFrom" @change="applyFilters"
+                               class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm border px-3 py-2">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-gray-500 mb-1">Bis Datum</label>
+                        <input type="date" x-model="filters.dateTo" @change="applyFilters"
+                               class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm border px-3 py-2">
+                    </div>
+                    
+                    <!-- Amount Range -->
+                    <div>
+                        <label class="block text-xs font-medium text-gray-500 mb-1">Min. Betrag (€)</label>
+                        <input type="number" step="0.01" x-model="filters.amountMin" @input="applyFilters" placeholder="-100"
+                               class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm border px-3 py-2">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-gray-500 mb-1">Max. Betrag (€)</label>
+                        <input type="number" step="0.01" x-model="filters.amountMax" @input="applyFilters" placeholder="1000"
+                               class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm border px-3 py-2">
+                    </div>
+                    
+                    <!-- Type & Status Filters -->
+                    <div class="sm:col-span-2">
+                        <label class="block text-xs font-medium text-gray-500 mb-2">Transaktionstyp</label>
+                        <div class="flex gap-4">
+                            <label class="inline-flex items-center">
+                                <input type="radio" x-model="filters.type" value="all" @change="applyFilters"
+                                       class="form-radio h-4 w-4 text-primary-600 border-gray-300 focus:ring-primary-500">
+                                <span class="ml-2 text-sm text-gray-700">Alle</span>
+                            </label>
+                            <label class="inline-flex items-center">
+                                <input type="radio" x-model="filters.type" value="income" @change="applyFilters"
+                                       class="form-radio h-4 w-4 text-green-600 border-gray-300 focus:ring-green-500">
+                                <span class="ml-2 text-sm text-gray-700">Eingänge</span>
+                            </label>
+                            <label class="inline-flex items-center">
+                                <input type="radio" x-model="filters.type" value="expense" @change="applyFilters"
+                                       class="form-radio h-4 w-4 text-red-600 border-gray-300 focus:ring-red-500">
+                                <span class="ml-2 text-sm text-gray-700">Ausgänge</span>
+                            </label>
+                        </div>
+                    </div>
+                    
+                    <div class="sm:col-span-2">
+                        <label class="block text-xs font-medium text-gray-500 mb-2">Status</label>
+                        <select x-model="filters.status" @change="applyFilters"
+                                class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm border px-3 py-2">
+                            <option value="all">Alle Status</option>
+                            <option value="Completed">Abgeschlossen</option>
+                            <option value="Pending">Ausstehend</option>
+                            <option value="Denied">Abgelehnt</option>
+                            <option value="Failed">Fehlgeschlagen</option>
+                        </select>
+                    </div>
+                </div>
+                
+                <!-- Reset Filters -->
+                <div x-show="activeFilterCount > 0" class="flex justify-between items-center pt-2 border-t border-gray-100">
+                    <span class="text-sm text-gray-500">
+                        <span x-text="filteredTransactions.length"></span> von <span x-text="allTransactions.length"></span> Transaktionen
+                        <template x-if="filteredSum !== null">
+                            <span class="ml-2">
+                                | Summe: <span :class="filteredSum >= 0 ? 'text-green-600' : 'text-red-600'" x-text="formatCurrency(filteredSum)"></span>
+                            </span>
+                        </template>
+                    </span>
+                    <button @click="resetFilters" class="text-sm text-red-600 hover:text-red-500">
+                        Filter zurücksetzen
+                    </button>
+                </div>
+            </div>
         </div>
         
-        {% if transactions is empty %}
-        <div class="p-6 text-center text-gray-500">
-            <p>Keine Transaktionen vorhanden.</p>
-            <p class="text-sm mt-1">Klicke auf "Synchronisieren" um Transaktionen abzurufen.</p>
-        </div>
-        {% else %}
-        <div class="overflow-x-auto">
-            <table class="min-w-full divide-y divide-gray-200">
-                <thead class="bg-gray-50">
-                    <tr>
-                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Datum</th>
-                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Typ</th>
-                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Name / E-Mail</th>
-                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Betreff</th>
-                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
-                        <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Betrag</th>
-                        <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Gebühr</th>
-                        <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Netto</th>
-                    </tr>
-                </thead>
-                <tbody class="bg-white divide-y divide-gray-200">
-                    {% for tx in transactions %}
-                    <tr class="hover:bg-gray-50">
-                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                            {{ tx.timestamp|date('d.m.Y H:i') }}
-                        </td>
-                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                            {{ tx.type }}
-                        </td>
-                        <td class="px-6 py-4 text-sm text-gray-900">
-                            <div>{{ tx.name ?: '-' }}</div>
-                            {% if tx.email %}
-                            <div class="text-xs text-gray-500">{{ tx.email }}</div>
-                            {% endif %}
-                        </td>
-                        <td class="px-6 py-4 text-sm text-gray-500 max-w-xs truncate">
-                            {{ tx.subject ?: '-' }}
-                        </td>
-                        <td class="px-6 py-4 whitespace-nowrap text-sm">
-                            <span class="px-2 py-1 text-xs rounded-full 
-                                {% if tx.status == 'Completed' %}bg-green-100 text-green-800
-                                {% elseif tx.status == 'Pending' %}bg-yellow-100 text-yellow-800
-                                {% elseif tx.status == 'Denied' or tx.status == 'Failed' %}bg-red-100 text-red-800
-                                {% else %}bg-gray-100 text-gray-800{% endif %}">
-                                {{ tx.status }}
-                            </span>
-                        </td>
-                        <td class="px-6 py-4 whitespace-nowrap text-sm text-right {% if tx.amount >= 0 %}text-green-600{% else %}text-red-600{% endif %}">
-                            {{ tx.amount|number_format(2, ',', '.') }} {{ tx.currency }}
-                        </td>
-                        <td class="px-6 py-4 whitespace-nowrap text-sm text-right text-gray-500">
-                            {% if tx.fee_amount != 0 %}
-                            {{ tx.fee_amount|number_format(2, ',', '.') }} {{ tx.currency }}
-                            {% else %}-{% endif %}
-                        </td>
-                        <td class="px-6 py-4 whitespace-nowrap text-sm text-right font-medium {% if tx.net_amount >= 0 %}text-green-600{% else %}text-red-600{% endif %}">
-                            {{ tx.net_amount|number_format(2, ',', '.') }} {{ tx.currency }}
-                        </td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        </div>
-        {% endif %}
+        <template x-if="filteredTransactions.length > 0">
+            <div>
+                <div class="overflow-x-auto">
+                    <table class="min-w-full divide-y divide-gray-200">
+                        <thead class="bg-gray-50">
+                            <tr>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                                    @click="sortBy('timestamp')">
+                                    <div class="flex items-center">
+                                        Datum
+                                        <span x-show="sortField === 'timestamp'" class="ml-1" x-text="sortDir === 'asc' ? '↑' : '↓'"></span>
+                                    </div>
+                                </th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                                    @click="sortBy('type')">
+                                    <div class="flex items-center">
+                                        Typ
+                                        <span x-show="sortField === 'type'" class="ml-1" x-text="sortDir === 'asc' ? '↑' : '↓'"></span>
+                                    </div>
+                                </th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                                    @click="sortBy('name')">
+                                    <div class="flex items-center">
+                                        Name / E-Mail
+                                        <span x-show="sortField === 'name'" class="ml-1" x-text="sortDir === 'asc' ? '↑' : '↓'"></span>
+                                    </div>
+                                </th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Betreff</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                                <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                                    @click="sortBy('amount')">
+                                    <div class="flex items-center justify-end">
+                                        Betrag
+                                        <span x-show="sortField === 'amount'" class="ml-1" x-text="sortDir === 'asc' ? '↑' : '↓'"></span>
+                                    </div>
+                                </th>
+                                <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Gebühr</th>
+                                <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                                    @click="sortBy('net_amount')">
+                                    <div class="flex items-center justify-end">
+                                        Netto
+                                        <span x-show="sortField === 'net_amount'" class="ml-1" x-text="sortDir === 'asc' ? '↑' : '↓'"></span>
+                                    </div>
+                                </th>
+                            </tr>
+                        </thead>
+                        <tbody class="bg-white divide-y divide-gray-200">
+                            <template x-for="tx in paginatedTransactions" :key="tx.id">
+                                <tr class="hover:bg-gray-50">
+                                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900" x-text="formatDateTime(tx.timestamp)"></td>
+                                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500" x-text="tx.type"></td>
+                                    <td class="px-6 py-4 text-sm text-gray-900">
+                                        <div x-text="tx.name || '-'"></div>
+                                        <div x-show="tx.email" class="text-xs text-gray-500" x-text="tx.email"></div>
+                                    </td>
+                                    <td class="px-6 py-4 text-sm text-gray-500 max-w-xs truncate" :title="tx.subject" x-text="tx.subject || '-'"></td>
+                                    <td class="px-6 py-4 whitespace-nowrap text-sm">
+                                        <span class="px-2 py-1 text-xs rounded-full"
+                                              :class="{
+                                                  'bg-green-100 text-green-800': tx.status === 'Completed',
+                                                  'bg-yellow-100 text-yellow-800': tx.status === 'Pending',
+                                                  'bg-red-100 text-red-800': tx.status === 'Denied' || tx.status === 'Failed',
+                                                  'bg-gray-100 text-gray-800': !['Completed', 'Pending', 'Denied', 'Failed'].includes(tx.status)
+                                              }"
+                                              x-text="tx.status"></span>
+                                    </td>
+                                    <td class="px-6 py-4 whitespace-nowrap text-sm text-right"
+                                        :class="parseFloat(tx.amount) >= 0 ? 'text-green-600' : 'text-red-600'"
+                                        x-text="formatCurrency(tx.amount)"></td>
+                                    <td class="px-6 py-4 whitespace-nowrap text-sm text-right text-gray-500"
+                                        x-text="tx.fee_amount != 0 ? formatCurrency(tx.fee_amount) : '-'"></td>
+                                    <td class="px-6 py-4 whitespace-nowrap text-sm text-right font-medium"
+                                        :class="parseFloat(tx.net_amount) >= 0 ? 'text-green-600' : 'text-red-600'"
+                                        x-text="formatCurrency(tx.net_amount)"></td>
+                                </tr>
+                            </template>
+                        </tbody>
+                    </table>
+                </div>
+
+                <!-- Client-side Pagination -->
+                <div x-show="totalPages > 1" class="px-4 py-3 border-t border-gray-200 flex items-center justify-between">
+                    <div class="flex-1 flex justify-between sm:hidden">
+                        <button @click="currentPage--" :disabled="currentPage === 1"
+                                class="relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50">
+                            Zurück
+                        </button>
+                        <button @click="currentPage++" :disabled="currentPage >= totalPages"
+                                class="ml-3 relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50">
+                            Weiter
+                        </button>
+                    </div>
+                    <div class="hidden sm:flex-1 sm:flex sm:items-center sm:justify-between">
+                        <div>
+                            <p class="text-sm text-gray-700">
+                                Seite <span class="font-medium" x-text="currentPage"></span> von <span class="font-medium" x-text="totalPages"></span>
+                                (<span x-text="filteredTransactions.length"></span> Transaktionen)
+                            </p>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <label class="text-sm text-gray-500">Pro Seite:</label>
+                            <select x-model.number="perPage" @change="currentPage = 1" class="rounded-md border-gray-300 text-sm py-1">
+                                <option value="25">25</option>
+                                <option value="50">50</option>
+                                <option value="100">100</option>
+                                <option value="250">250</option>
+                            </select>
+                            <nav class="relative z-0 inline-flex rounded-md shadow-sm -space-x-px ml-4" aria-label="Pagination">
+                                <button @click="currentPage--" :disabled="currentPage === 1"
+                                        class="relative inline-flex items-center px-2 py-2 rounded-l-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50 disabled:opacity-50">
+                                    <svg class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                                        <path fill-rule="evenodd" d="M12.707 5.293a1 1 0 010 1.414L9.414 10l3.293 3.293a1 1 0 01-1.414 1.414l-4-4a1 1 0 010-1.414l4-4a1 1 0 011.414 0z" clip-rule="evenodd" />
+                                    </svg>
+                                </button>
+                                <button @click="currentPage++" :disabled="currentPage >= totalPages"
+                                        class="relative inline-flex items-center px-2 py-2 rounded-r-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50 disabled:opacity-50">
+                                    <svg class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                                        <path fill-rule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clip-rule="evenodd" />
+                                    </svg>
+                                </button>
+                            </nav>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </template>
+
+        <template x-if="filteredTransactions.length === 0 && allTransactions.length > 0">
+            <div class="p-6 text-center text-gray-500">
+                <span class="text-4xl">🔍</span>
+                <p class="mt-2">Keine Transaktionen gefunden</p>
+                <p class="text-sm mt-1">Passen Sie die Filter an oder setzen Sie sie zurück</p>
+                <button @click="resetFilters" class="mt-3 text-sm text-primary-600 hover:text-primary-500">Filter zurücksetzen</button>
+            </div>
+        </template>
+
+        <template x-if="allTransactions.length === 0">
+            <div class="p-6 text-center text-gray-500">
+                <p>Keine Transaktionen vorhanden.</p>
+                <p class="text-sm mt-1">Klicke auf "Synchronisieren" um Transaktionen abzurufen.</p>
+            </div>
+        </template>
     </div>
 </div>
 
 <script>
-function paypalAccount() {
+function paypalAccount(initialTransactions) {
     return {
         syncing: false,
         message: '',
         messageType: 'success',
         mqttExport: {{ account.mqtt_export ? 'true' : 'false' }},
+        
+        // Transactions & Filtering
+        allTransactions: initialTransactions || [],
+        filteredTransactions: [],
+        
+        // Filters
+        filters: {
+            search: '',
+            dateFrom: '',
+            dateTo: '',
+            amountMin: '',
+            amountMax: '',
+            type: 'all',
+            status: 'all'
+        },
+        showAdvancedFilters: false,
+        
+        // Sorting
+        sortField: 'timestamp',
+        sortDir: 'desc',
+        
+        // Pagination
+        currentPage: 1,
+        perPage: 50,
+        
+        init() {
+            this.applyFilters();
+        },
+        
+        get activeFilterCount() {
+            let count = 0;
+            if (this.filters.search) count++;
+            if (this.filters.dateFrom) count++;
+            if (this.filters.dateTo) count++;
+            if (this.filters.amountMin !== '') count++;
+            if (this.filters.amountMax !== '') count++;
+            if (this.filters.type !== 'all') count++;
+            if (this.filters.status !== 'all') count++;
+            return count;
+        },
+        
+        get filteredSum() {
+            if (this.activeFilterCount === 0) return null;
+            return this.filteredTransactions.reduce((sum, tx) => sum + parseFloat(tx.net_amount), 0);
+        },
+        
+        get totalPages() {
+            return Math.ceil(this.filteredTransactions.length / this.perPage);
+        },
+        
+        get paginatedTransactions() {
+            const start = (this.currentPage - 1) * this.perPage;
+            return this.filteredTransactions.slice(start, start + this.perPage);
+        },
+        
+        applyFilters() {
+            let result = [...this.allTransactions];
+            
+            // Text search
+            if (this.filters.search) {
+                const search = this.filters.search.toLowerCase();
+                result = result.filter(tx => 
+                    (tx.name && tx.name.toLowerCase().includes(search)) ||
+                    (tx.email && tx.email.toLowerCase().includes(search)) ||
+                    (tx.subject && tx.subject.toLowerCase().includes(search)) ||
+                    (tx.type && tx.type.toLowerCase().includes(search))
+                );
+            }
+            
+            // Date filters
+            if (this.filters.dateFrom) {
+                result = result.filter(tx => tx.timestamp >= this.filters.dateFrom);
+            }
+            if (this.filters.dateTo) {
+                const endDate = this.filters.dateTo + 'T23:59:59';
+                result = result.filter(tx => tx.timestamp <= endDate);
+            }
+            
+            // Amount filters
+            if (this.filters.amountMin !== '') {
+                const min = parseFloat(this.filters.amountMin);
+                result = result.filter(tx => parseFloat(tx.net_amount) >= min);
+            }
+            if (this.filters.amountMax !== '') {
+                const max = parseFloat(this.filters.amountMax);
+                result = result.filter(tx => parseFloat(tx.net_amount) <= max);
+            }
+            
+            // Type filter
+            if (this.filters.type === 'income') {
+                result = result.filter(tx => parseFloat(tx.amount) >= 0);
+            } else if (this.filters.type === 'expense') {
+                result = result.filter(tx => parseFloat(tx.amount) < 0);
+            }
+            
+            // Status filter
+            if (this.filters.status !== 'all') {
+                result = result.filter(tx => tx.status === this.filters.status);
+            }
+            
+            // Sort
+            result.sort((a, b) => {
+                let aVal = a[this.sortField];
+                let bVal = b[this.sortField];
+                
+                if (['amount', 'net_amount', 'fee_amount'].includes(this.sortField)) {
+                    aVal = parseFloat(aVal);
+                    bVal = parseFloat(bVal);
+                }
+                
+                if (aVal < bVal) return this.sortDir === 'asc' ? -1 : 1;
+                if (aVal > bVal) return this.sortDir === 'asc' ? 1 : -1;
+                return 0;
+            });
+            
+            this.filteredTransactions = result;
+            this.currentPage = 1;
+        },
+        
+        sortBy(field) {
+            if (this.sortField === field) {
+                this.sortDir = this.sortDir === 'asc' ? 'desc' : 'asc';
+            } else {
+                this.sortField = field;
+                this.sortDir = field === 'timestamp' ? 'desc' : 'asc';
+            }
+            this.applyFilters();
+        },
+        
+        resetFilters() {
+            this.filters = {
+                search: '',
+                dateFrom: '',
+                dateTo: '',
+                amountMin: '',
+                amountMax: '',
+                type: 'all',
+                status: 'all'
+            };
+            this.applyFilters();
+        },
+        
+        formatDateTime(dateStr) {
+            if (!dateStr) return '-';
+            const d = new Date(dateStr);
+            return d.toLocaleDateString('de-DE') + ' ' + d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+        },
+        
+        formatCurrency(amount) {
+            return parseFloat(amount).toLocaleString('de-DE', { 
+                style: 'currency', 
+                currency: 'EUR' 
+            });
+        },
         
         async sync() {
             this.syncing = true;
@@ -178,7 +518,6 @@ function paypalAccount() {
                 this.messageType = data.success ? 'success' : 'error';
                 
                 if (data.success) {
-                    // Reload page to show updated data
                     setTimeout(() => window.location.reload(), 1500);
                 }
             } catch (error) {

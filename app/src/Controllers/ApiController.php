@@ -546,9 +546,10 @@ class ApiController
         elseif ($pendingSyncAccountId) {
             $account = $this->db->getAccountById($pendingSyncAccountId);
             if ($account) {
+                $historyDays = (int) $this->db->getSetting('transaction_history_days', '90');
                 $syncContext = [
                     'account_identifier' => $account['iban'] ?? $account['account_number'],
-                    'from' => new \DateTime('-30 days'),
+                    'from' => new \DateTime("-{$historyDays} days"),
                     'to' => new \DateTime(),
                     'account_id' => $pendingSyncAccountId
                 ];
@@ -687,11 +688,22 @@ class ApiController
         }
 
         $params = $request->getQueryParams();
+        $total = $this->db->getTransactionCount($accountId);
+        
+        // If 'all' parameter is set, return all transactions
+        if (isset($params['all']) && $params['all']) {
+            $transactions = $this->db->getTransactionsByAccountId($accountId, $total, 0);
+            return $this->jsonResponse($response, [
+                'success' => true,
+                'transactions' => $transactions,
+                'total' => $total
+            ]);
+        }
+        
         $limit = min(100, max(1, (int) ($params['limit'] ?? 30)));
         $offset = max(0, (int) ($params['offset'] ?? 0));
 
         $transactions = $this->db->getTransactionsByAccountId($accountId, $limit, $offset);
-        $total = $this->db->getTransactionCount($accountId);
 
         return $this->jsonResponse($response, [
             'success' => true,
@@ -729,7 +741,8 @@ class ApiController
 
         // Parse request body for date range
         $data = $request->getParsedBody() ?? [];
-        $from = isset($data['from']) ? new \DateTime($data['from']) : new \DateTime('-30 days');
+        $historyDays = (int) $this->db->getSetting('transaction_history_days', '90');
+        $from = isset($data['from']) ? new \DateTime($data['from']) : new \DateTime("-{$historyDays} days");
         $to = isset($data['to']) ? new \DateTime($data['to']) : new \DateTime();
 
         // Try to use existing session (preserves kundensystemId for TAN-free access per PSD2)

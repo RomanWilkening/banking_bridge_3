@@ -26,10 +26,23 @@ class FinTSService
     private ?FinTs $finTs = null;
     private array $config = [];
     private ?string $productId = null;
+    private ?DatabaseService $db = null;
 
-    public function __construct(Logger $logger)
+    public function __construct(Logger $logger, ?DatabaseService $db = null)
     {
         $this->logger = $logger;
+        $this->db = $db;
+    }
+    
+    /**
+     * Get the configured transaction history days
+     */
+    private function getHistoryDays(): int
+    {
+        if ($this->db) {
+            return (int) $this->db->getSetting('transaction_history_days', '90');
+        }
+        return 90;
     }
 
     /**
@@ -636,10 +649,11 @@ class FinTSService
                         ]);
                     }
                     
-                    // Fetch transactions (last 30 days)
+                    // Fetch transactions (configurable, default 90 days)
                     $this->logger->info('Fetching transactions', ['account_id' => $accountId]);
                     try {
-                        $from = new \DateTime('-30 days');
+                        $days = $this->getHistoryDays();
+                        $from = new \DateTime("-{$days} days");
                         $to = new \DateTime();
                         
                         $txResult = $this->fetchTransactionsInternal($sepaAccount, $from, $to);
@@ -1113,7 +1127,8 @@ class FinTSService
             'errors' => []
         ];
         
-        $from = new \DateTime('-30 days');
+        $days = $this->getHistoryDays();
+        $from = new \DateTime("-{$days} days");
         $to = new \DateTime();
         
         // Log all SEPA accounts for debugging
@@ -1503,9 +1518,10 @@ class FinTSService
                 ];
             }
 
-            // Default to last 30 days if no date range specified
+            // Default to configured history days if no date range specified
             if ($from === null) {
-                $from = new \DateTime('-30 days');
+                $days = $this->getHistoryDays();
+                $from = new \DateTime("-{$days} days");
             }
             if ($to === null) {
                 $to = new \DateTime();
