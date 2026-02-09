@@ -545,18 +545,43 @@ class DatabaseService
 
     /**
      * Save a single transaction (insert or update)
-     * Returns 1 if new, 0 if updated existing
+     * Returns 1 if new, 0 if skipped (duplicate)
      */
     public function saveTransaction(int $accountId, array $data): int
     {
-        // Generate a unique transaction ID
-        $transactionId = $data['transaction_id'] ?? $this->generateTransactionId($accountId, $data);
+        // Normalize the data for consistent comparison
+        $bookingDate = $data['booking_date'] ?? null;
+        if ($bookingDate && strtotime($bookingDate)) {
+            $bookingDate = date('Y-m-d', strtotime($bookingDate));
+        }
         
-        // Check if this is a new transaction
-        $isNew = !$this->transactionExists($accountId, $transactionId);
+        $amount = round((float)($data['amount'] ?? 0), 2);
+        $name = trim($data['name'] ?? '');
+        
+        // First: Check if an identical transaction already exists (data-based check)
+        // This catches duplicates even if the hash algorithm changed
+        $existingStmt = $this->pdo->prepare("
+            SELECT id, transaction_id FROM transactions 
+            WHERE account_id = ? 
+              AND booking_date = ? 
+              AND ROUND(amount, 2) = ROUND(?, 2)
+              AND LOWER(TRIM(COALESCE(name, ''))) = LOWER(?)
+            LIMIT 1
+        ");
+        $existingStmt->execute([$accountId, $bookingDate, $amount, strtolower($name)]);
+        $existing = $existingStmt->fetch();
+        
+        if ($existing) {
+            // Transaction already exists - skip (don't even update)
+            return 0;
+        }
+        
+        // Generate a unique transaction ID for new transactions
+        $transactionId = $this->generateTransactionId($accountId, $data);
 
+        // Insert new transaction (use INSERT OR IGNORE as extra safety)
         $stmt = $this->pdo->prepare("
-            INSERT OR REPLACE INTO transactions (
+            INSERT OR IGNORE INTO transactions (
                 account_id, transaction_id, booking_date, valuta_date, amount, currency,
                 name, description, iban, bic, mandate_id, creditor_id, 
                 end_to_end_id, booking_text, prima_nota
@@ -566,11 +591,11 @@ class DatabaseService
         $stmt->execute([
             $accountId,
             $transactionId,
-            $data['booking_date'] ?? null,
+            $bookingDate,
             $data['valuta_date'] ?? null,
-            $data['amount'] ?? 0,
+            $amount,
             $data['currency'] ?? 'EUR',
-            $data['name'] ?? null,
+            $name,
             $data['description'] ?? null,
             $data['iban'] ?? null,
             $data['bic'] ?? null,
@@ -581,7 +606,8 @@ class DatabaseService
             $data['prima_nota'] ?? null
         ]);
         
-        return $isNew ? 1 : 0;
+        // Return 1 if a row was actually inserted
+        return $stmt->rowCount() > 0 ? 1 : 0;
     }
 
     /**
