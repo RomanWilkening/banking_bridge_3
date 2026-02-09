@@ -53,7 +53,7 @@ class SettingsController
         
         // Save transaction history setting
         if (isset($data['transaction_history_days'])) {
-            $days = max(7, min(365, (int) $data['transaction_history_days'])); // 7-365 days
+            $days = max(7, min(1095, (int) $data['transaction_history_days'])); // 7-1095 days (3 years for PayPal)
             $this->db->setSetting('transaction_history_days', (string) $days);
         }
 
