@@ -5,7 +5,6 @@ use Slim\App;
 use App\Controllers\HomeController;
 use App\Controllers\BankController;
 use App\Controllers\ApiController;
-use App\Controllers\PayPalController;
 
 return function (App $app) {
     // Web Routes
@@ -19,13 +18,6 @@ return function (App $app) {
     
     // Account Routes
     $app->get('/accounts/{id}', [\App\Controllers\AccountController::class, 'show'])->setName('accounts.show');
-    
-    // PayPal Routes
-    $app->get('/paypal', [PayPalController::class, 'index'])->setName('paypal.index');
-    $app->get('/paypal/add', [PayPalController::class, 'add'])->setName('paypal.add');
-    $app->post('/paypal/add', [PayPalController::class, 'store'])->setName('paypal.store');
-    $app->get('/paypal/{id}', [PayPalController::class, 'show'])->setName('paypal.show');
-    $app->post('/paypal/{id}/delete', [PayPalController::class, 'delete'])->setName('paypal.delete');
     
     // Settings Routes
     $app->get('/settings', [\App\Controllers\SettingsController::class, 'index'])->setName('settings');
@@ -74,11 +66,4 @@ return function (App $app) {
     $app->get('/api/maintenance/duplicates', [ApiController::class, 'getDuplicates'])->setName('api.maintenance.duplicates');
     $app->post('/api/maintenance/duplicates/remove', [ApiController::class, 'removeDuplicates'])->setName('api.maintenance.removeDuplicates');
     $app->post('/api/maintenance/regenerate-ids', [ApiController::class, 'regenerateTransactionIds'])->setName('api.maintenance.regenerateIds');
-    
-    // PayPal API Routes
-    $app->post('/api/paypal/test', [PayPalController::class, 'testCredentials'])->setName('api.paypal.test');
-    $app->post('/api/paypal/{id}/sync', [PayPalController::class, 'sync'])->setName('api.paypal.sync');
-    $app->get('/api/paypal/{id}/transactions', [PayPalController::class, 'getTransactions'])->setName('api.paypal.transactions');
-    $app->get('/api/paypal/{id}/balance', [PayPalController::class, 'getBalance'])->setName('api.paypal.balance');
-    $app->post('/api/paypal/{id}/mqtt-export', [PayPalController::class, 'setMqttExport'])->setName('api.paypal.mqttExport');
 };

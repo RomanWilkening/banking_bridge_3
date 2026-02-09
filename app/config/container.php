@@ -6,7 +6,6 @@ use Slim\Views\Twig;
 use App\Services\DatabaseService;
 use App\Services\FinTSService;
 use App\Services\MqttService;
-use App\Services\PayPalService;
 use Monolog\Logger;
 use Monolog\Handler\StreamHandler;
 
@@ -54,11 +53,5 @@ return [
         $logger = $container->get(Logger::class);
         $db = $container->get(DatabaseService::class);
         return new MqttService($logger, $db);
-    },
-    
-    PayPalService::class => function (ContainerInterface $container) {
-        $logger = $container->get(Logger::class);
-        $db = $container->get(DatabaseService::class);
-        return new PayPalService($logger, $db);
     },
 ];
