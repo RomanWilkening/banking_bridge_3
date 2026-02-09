@@ -136,6 +136,12 @@ class DatabaseService
             CREATE INDEX IF NOT EXISTS idx_transactions_account_date 
             ON transactions(account_id, booking_date DESC)
         ");
+        
+        // Index for duplicate detection query (account + date + amount)
+        $this->pdo->exec("
+            CREATE INDEX IF NOT EXISTS idx_transactions_dedup 
+            ON transactions(account_id, booking_date, amount)
+        ");
 
         $this->pdo->exec("
             CREATE TABLE IF NOT EXISTS bank_capabilities (
@@ -557,24 +563,28 @@ class DatabaseService
         
         $amount = round((float)($data['amount'] ?? 0), 2);
         $name = trim($data['name'] ?? '');
+        $nameLower = mb_strtolower($name);
         
         // First: Check if an identical transaction already exists (data-based check)
-        // This catches duplicates even if the hash algorithm changed
+        // Uses idx_transactions_dedup index for fast lookup on (account_id, booking_date, amount)
+        // Then filters by name in PHP for exact match (avoids LOWER() on DB side which can't use index)
         $existingStmt = $this->pdo->prepare("
-            SELECT id, transaction_id FROM transactions 
+            SELECT id, name FROM transactions 
             WHERE account_id = ? 
               AND booking_date = ? 
-              AND ROUND(amount, 2) = ROUND(?, 2)
-              AND LOWER(TRIM(COALESCE(name, ''))) = LOWER(?)
-            LIMIT 1
+              AND amount = ?
         ");
-        $existingStmt->execute([$accountId, $bookingDate, $amount, strtolower($name)]);
-        $existing = $existingStmt->fetch();
+        $existingStmt->execute([$accountId, $bookingDate, $amount]);
         
-        if ($existing) {
-            // Transaction already exists - skip (don't even update)
-            return 0;
+        // Check name match in PHP (faster than DB-side LOWER for small result sets)
+        while ($row = $existingStmt->fetch()) {
+            $existingName = mb_strtolower(trim($row['name'] ?? ''));
+            if ($existingName === $nameLower) {
+                // Transaction already exists - skip
+                return 0;
+            }
         }
+        // No duplicate found - not an exact match
         
         // Generate a unique transaction ID for new transactions
         $transactionId = $this->generateTransactionId($accountId, $data);
