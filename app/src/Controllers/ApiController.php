@@ -1897,4 +1897,26 @@ class ApiController
             'message' => "{$removed} doppelte Transaktionen wurden entfernt."
         ]);
     }
+    
+    /**
+     * Regenerate transaction IDs with current algorithm
+     */
+    public function regenerateTransactionIds(Request $request, Response $response): Response
+    {
+        $data = $request->getParsedBody() ?? [];
+        $accountId = isset($data['account_id']) ? (int) $data['account_id'] : null;
+        
+        $count = $this->db->regenerateTransactionIds($accountId);
+        
+        $this->logger->info('Regenerated transaction IDs', [
+            'count' => $count,
+            'account_id' => $accountId
+        ]);
+        
+        return $this->jsonResponse($response, [
+            'success' => true,
+            'regenerated' => $count,
+            'message' => "Transaction-IDs für {$count} Transaktionen wurden neu generiert."
+        ]);
+    }
 }

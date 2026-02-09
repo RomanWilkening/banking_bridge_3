@@ -65,4 +65,5 @@ return function (App $app) {
     // Database Maintenance API (Duplicates)
     $app->get('/api/maintenance/duplicates', [ApiController::class, 'getDuplicates'])->setName('api.maintenance.duplicates');
     $app->post('/api/maintenance/duplicates/remove', [ApiController::class, 'removeDuplicates'])->setName('api.maintenance.removeDuplicates');
+    $app->post('/api/maintenance/regenerate-ids', [ApiController::class, 'regenerateTransactionIds'])->setName('api.maintenance.regenerateIds');
 };

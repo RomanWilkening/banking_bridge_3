@@ -514,18 +514,23 @@ class DatabaseService
             return md5($accountId . ':pn:' . $data['prima_nota'] . ':' . ($data['booking_date'] ?? ''));
         }
         
-        // Fallback: Create hash from transaction details
-        // Include all relevant fields to avoid false duplicates
-        $name = substr($data['name'] ?? '', 0, 50); // Truncate name to avoid minor variations
-        $description = substr($data['description'] ?? '', 0, 100); // Include description/Verwendungszweck
+        // Fallback: Create hash from normalized transaction details
+        // Normalize name: lowercase, trim, remove multiple spaces
+        $name = $data['name'] ?? '';
+        $name = mb_strtolower(trim($name));
+        $name = preg_replace('/\s+/', ' ', $name); // Multiple spaces -> single space
+        $name = substr($name, 0, 50); // Truncate to avoid minor variations at end
         
-        return md5(
-            $accountId . ':' .
-            ($data['booking_date'] ?? '') . ':' .
-            number_format((float)($data['amount'] ?? 0), 2, '.', '') . ':' .
-            $name . ':' .
-            $description
-        );
+        // Normalize date to Y-m-d format
+        $date = $data['booking_date'] ?? '';
+        if ($date && strtotime($date)) {
+            $date = date('Y-m-d', strtotime($date));
+        }
+        
+        // Amount with fixed precision
+        $amount = number_format((float)($data['amount'] ?? 0), 2, '.', '');
+        
+        return md5($accountId . ':' . $date . ':' . $amount . ':' . $name);
     }
 
     /**
