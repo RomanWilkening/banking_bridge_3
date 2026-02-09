@@ -515,13 +515,16 @@ class DatabaseService
         }
         
         // Fallback: Create hash from transaction details
-        // Use only stable fields (amount, date, truncated name)
+        // Include all relevant fields to avoid false duplicates
         $name = substr($data['name'] ?? '', 0, 50); // Truncate name to avoid minor variations
+        $description = substr($data['description'] ?? '', 0, 100); // Include description/Verwendungszweck
+        
         return md5(
             $accountId . ':' .
             ($data['booking_date'] ?? '') . ':' .
             number_format((float)($data['amount'] ?? 0), 2, '.', '') . ':' .
-            $name
+            $name . ':' .
+            $description
         );
     }
 
@@ -629,6 +632,163 @@ class DatabaseService
         $stmt->execute([$accountId]);
         $result = $stmt->fetch();
         return $result['latest'] ?? null;
+    }
+
+    /**
+     * Find duplicate transactions across all accounts or for a specific account
+     * Duplicates are identified by: same account, date, amount, name, and description
+     */
+    public function findDuplicateTransactions(?int $accountId = null): array
+    {
+        $sql = "
+            SELECT 
+                t1.id,
+                t1.account_id,
+                t1.booking_date,
+                t1.amount,
+                t1.name,
+                t1.description,
+                t1.transaction_id,
+                t1.created_at,
+                a.account_name,
+                a.iban,
+                b.name as bank_name
+            FROM transactions t1
+            INNER JOIN (
+                SELECT 
+                    account_id, 
+                    booking_date, 
+                    amount, 
+                    COALESCE(name, '') as name, 
+                    COALESCE(description, '') as description,
+                    COUNT(*) as cnt,
+                    MIN(id) as keep_id
+                FROM transactions
+                " . ($accountId ? "WHERE account_id = ?" : "") . "
+                GROUP BY account_id, booking_date, amount, COALESCE(name, ''), COALESCE(description, '')
+                HAVING COUNT(*) > 1
+            ) t2 ON t1.account_id = t2.account_id 
+                AND t1.booking_date = t2.booking_date 
+                AND t1.amount = t2.amount 
+                AND COALESCE(t1.name, '') = t2.name 
+                AND COALESCE(t1.description, '') = t2.description
+            LEFT JOIN accounts a ON t1.account_id = a.id
+            LEFT JOIN banks b ON a.bank_id = b.id
+            ORDER BY t1.account_id, t1.booking_date DESC, t1.amount, t1.id
+        ";
+        
+        $stmt = $this->pdo->prepare($sql);
+        $stmt->execute($accountId ? [$accountId] : []);
+        return $stmt->fetchAll();
+    }
+
+    /**
+     * Get summary of duplicate transactions
+     */
+    public function getDuplicateSummary(?int $accountId = null): array
+    {
+        $sql = "
+            SELECT 
+                account_id,
+                booking_date,
+                amount,
+                COALESCE(name, '') as name,
+                COALESCE(description, '') as description,
+                COUNT(*) as duplicate_count,
+                MIN(id) as keep_id
+            FROM transactions
+            " . ($accountId ? "WHERE account_id = ?" : "") . "
+            GROUP BY account_id, booking_date, amount, COALESCE(name, ''), COALESCE(description, '')
+            HAVING COUNT(*) > 1
+            ORDER BY duplicate_count DESC, booking_date DESC
+        ";
+        
+        $stmt = $this->pdo->prepare($sql);
+        $stmt->execute($accountId ? [$accountId] : []);
+        $results = $stmt->fetchAll();
+        
+        $totalDuplicates = 0;
+        $totalToRemove = 0;
+        foreach ($results as $row) {
+            $totalDuplicates += $row['duplicate_count'];
+            $totalToRemove += $row['duplicate_count'] - 1; // Keep one of each
+        }
+        
+        return [
+            'groups' => $results,
+            'total_duplicate_groups' => count($results),
+            'total_duplicate_transactions' => $totalDuplicates,
+            'total_to_remove' => $totalToRemove
+        ];
+    }
+
+    /**
+     * Remove duplicate transactions, keeping the oldest entry (lowest ID) of each duplicate group
+     * Returns the number of removed transactions
+     */
+    public function removeDuplicateTransactions(?int $accountId = null): int
+    {
+        // First, find all IDs to delete (all duplicates except the one with lowest ID in each group)
+        $sql = "
+            DELETE FROM transactions
+            WHERE id IN (
+                SELECT t1.id
+                FROM transactions t1
+                INNER JOIN (
+                    SELECT 
+                        account_id, 
+                        booking_date, 
+                        amount, 
+                        COALESCE(name, '') as name, 
+                        COALESCE(description, '') as description,
+                        MIN(id) as keep_id
+                    FROM transactions
+                    " . ($accountId ? "WHERE account_id = ?" : "") . "
+                    GROUP BY account_id, booking_date, amount, COALESCE(name, ''), COALESCE(description, '')
+                    HAVING COUNT(*) > 1
+                ) t2 ON t1.account_id = t2.account_id 
+                    AND t1.booking_date = t2.booking_date 
+                    AND t1.amount = t2.amount 
+                    AND COALESCE(t1.name, '') = t2.name 
+                    AND COALESCE(t1.description, '') = t2.description
+                    AND t1.id != t2.keep_id
+            )
+        ";
+        
+        $stmt = $this->pdo->prepare($sql);
+        $stmt->execute($accountId ? [$accountId] : []);
+        return $stmt->rowCount();
+    }
+
+    /**
+     * Regenerate transaction IDs for all transactions
+     * Useful after changing the hash algorithm
+     */
+    public function regenerateTransactionIds(?int $accountId = null): int
+    {
+        $sql = "SELECT id, account_id, booking_date, amount, name, description, end_to_end_id, prima_nota 
+                FROM transactions" . ($accountId ? " WHERE account_id = ?" : "");
+        $stmt = $this->pdo->prepare($sql);
+        $stmt->execute($accountId ? [$accountId] : []);
+        $transactions = $stmt->fetchAll();
+        
+        $updateStmt = $this->pdo->prepare("UPDATE transactions SET transaction_id = ? WHERE id = ?");
+        $count = 0;
+        
+        foreach ($transactions as $tx) {
+            $newId = $this->generateTransactionId($tx['account_id'], [
+                'booking_date' => $tx['booking_date'],
+                'amount' => $tx['amount'],
+                'name' => $tx['name'],
+                'description' => $tx['description'],
+                'end_to_end_id' => $tx['end_to_end_id'],
+                'prima_nota' => $tx['prima_nota']
+            ]);
+            $updateStmt->execute([$newId, $tx['id']]);
+            $count++;
+        }
+        
+        return $count;
     }
 
     public function updateAccountBalance(int $accountId, float $balance, ?string $balanceDate = null): bool

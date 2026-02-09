@@ -61,4 +61,8 @@ return function (App $app) {
     $app->patch('/api/accounts/{id}', [ApiController::class, 'updateAccount'])->setName('api.accounts.update');
     $app->post('/api/accounts/{id}/link-depot', [ApiController::class, 'linkAccountToDepot'])->setName('api.accounts.linkDepot');
     $app->get('/api/depots-for-linking', [ApiController::class, 'getDepotsForLinking'])->setName('api.depotsForLinking');
+    
+    // Database Maintenance API (Duplicates)
+    $app->get('/api/maintenance/duplicates', [ApiController::class, 'getDuplicates'])->setName('api.maintenance.duplicates');
+    $app->post('/api/maintenance/duplicates/remove', [ApiController::class, 'removeDuplicates'])->setName('api.maintenance.removeDuplicates');
 };
