@@ -182,10 +182,10 @@ class MqttService
         $details = [];
         
         try {
-            // Get all bank accounts that have MQTT export enabled
+            // Get all accounts that have MQTT export enabled
             $accounts = $this->db->getMqttEnabledAccounts();
             
-            $this->logger->info('MQTT bank accounts to publish', [
+            $this->logger->info('MQTT accounts to publish', [
                 'count' => count($accounts),
                 'accounts' => array_map(fn($a) => [
                     'id' => $a['id'],
@@ -224,42 +224,6 @@ class MqttService
                         'bank_name' => $account['bank_name'] ?? 'unknown',
                         'error' => $errorMsg,
                         'trace' => $e->getTraceAsString()
-                    ]);
-                }
-            }
-            
-            // Get all PayPal accounts that have MQTT export enabled
-            $paypalAccounts = $this->db->getMqttEnabledPayPalAccounts();
-            
-            $this->logger->info('MQTT PayPal accounts to publish', ['count' => count($paypalAccounts)]);
-            
-            foreach ($paypalAccounts as $paypal) {
-                $displayName = $paypal['name'] ?? 'PayPal';
-                try {
-                    $result = $this->publishPayPalBalance($paypal, $topicPrefix);
-                    $published++;
-                    $details[] = [
-                        'paypal_id' => $paypal['id'],
-                        'name' => $displayName,
-                        'bank' => 'PayPal',
-                        'topic' => $result['topic'],
-                        'balance' => $result['balance'],
-                        'status' => 'ok'
-                    ];
-                } catch (\Throwable $e) {
-                    $errorMsg = $e->getMessage();
-                    $errors[] = 'PayPal ' . $displayName . ': ' . $errorMsg;
-                    $details[] = [
-                        'paypal_id' => $paypal['id'],
-                        'name' => $displayName,
-                        'bank' => 'PayPal',
-                        'status' => 'error',
-                        'error' => $errorMsg
-                    ];
-                    $this->logger->error('Failed to publish PayPal account', [
-                        'paypal_id' => $paypal['id'],
-                        'name' => $displayName,
-                        'error' => $errorMsg
                     ]);
                 }
             }
@@ -427,113 +391,6 @@ class MqttService
             'account_name' => $accountName,
             'bank_name' => $bankName,
             'discovery_topic' => $discoveryTopic,
-            'state_topic' => $stateTopic,
-            'balance' => $balanceValue
-        ]);
-        
-        return [
-            'topic' => $stateTopic,
-            'discovery_topic' => $discoveryTopic,
-            'balance' => $balanceValue
-        ];
-    }
-    
-    /**
-     * Publish PayPal account balance with Home Assistant discovery
-     */
-    private function publishPayPalBalance(array $paypal, string $topicPrefix): array
-    {
-        $paypalId = $paypal['id'];
-        $accountName = $paypal['name'] ?? 'PayPal';
-        $balance = $paypal['balance'];
-        $currency = $paypal['currency'] ?? 'EUR';
-        $email = $paypal['email'] ?? null;
-        
-        $this->logger->debug('Publishing PayPal account', [
-            'paypal_id' => $paypalId,
-            'name' => $accountName,
-            'balance' => $balance,
-            'currency' => $currency
-        ]);
-        
-        // Create unique ID for this sensor
-        $uniqueId = 'paypal_' . $paypalId;
-        
-        // Create safe topic name
-        $safeName = $this->sanitizeTopicName($accountName) . '_' . $paypalId;
-        
-        // State topic
-        $stateTopic = "{$topicPrefix}/paypal/{$safeName}";
-        
-        // Home Assistant discovery topic
-        $discoveryTopic = "homeassistant/sensor/{$uniqueId}/config";
-        
-        // Handle null/empty balance
-        $balanceValue = $balance !== null ? round((float) $balance, 2) : 0;
-        
-        // Discovery payload for Home Assistant
-        $discoveryPayload = [
-            'name' => $accountName,
-            'unique_id' => $uniqueId,
-            'object_id' => $uniqueId,
-            'state_topic' => $stateTopic,
-            'value_template' => '{{ value_json.balance }}',
-            'unit_of_measurement' => $currency,
-            'device_class' => 'monetary',
-            'state_class' => 'total',
-            'icon' => 'mdi:wallet',
-            'json_attributes_topic' => $stateTopic,
-            'json_attributes_template' => '{{ value_json | tojson }}',
-            'device' => [
-                'identifiers' => ['banking_bridge_paypal'],
-                'name' => 'PayPal',
-                'manufacturer' => 'Banking Bridge',
-                'model' => 'PayPal API',
-            ],
-        ];
-        
-        // State payload
-        $statePayload = [
-            'balance' => $balanceValue,
-            'currency' => $currency,
-            'account_name' => $accountName,
-            'email' => $email,
-            'provider' => 'PayPal',
-            'last_updated' => date('c'),
-        ];
-        
-        $discoveryJson = json_encode($discoveryPayload);
-        $stateJson = json_encode($statePayload);
-        
-        if (!$this->ensureConnected()) {
-            throw new \RuntimeException('MQTT connection lost');
-        }
-        
-        // Publish discovery config (retained)
-        $this->client->publish(
-            $discoveryTopic,
-            $discoveryJson,
-            MqttClient::QOS_AT_LEAST_ONCE,
-            true
-        );
-        
-        usleep(50000);
-        
-        if (!$this->ensureConnected()) {
-            throw new \RuntimeException('MQTT connection lost before state publish');
-        }
-        
-        // Publish state (retained)
-        $this->client->publish(
-            $stateTopic,
-            $stateJson,
-            MqttClient::QOS_AT_LEAST_ONCE,
-            true
-        );
-        
-        $this->logger->info('Published PayPal to MQTT', [
-            'paypal_id' => $paypalId,
-            'name' => $accountName,
             'state_topic' => $stateTopic,
             'balance' => $balanceValue
         ]);
