@@ -1,0 +1,80 @@
+{% extends "layout.twig" %}
+
+{% block content %}
+<div class="max-w-7xl mx-auto">
+    <div class="sm:flex sm:items-center sm:justify-between mb-6">
+        <div>
+            <h1 class="text-2xl font-bold text-gray-900">PayPal-Konten</h1>
+            <p class="mt-1 text-sm text-gray-500">Verwalte deine PayPal-Konten</p>
+        </div>
+        <div class="mt-4 sm:mt-0">
+            <a href="/paypal/add" class="inline-flex items-center rounded-md bg-primary-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-primary-500">
+                <svg class="mr-2 h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
+                </svg>
+                PayPal hinzufügen
+            </a>
+        </div>
+    </div>
+
+    {% if accounts is empty %}
+    <div class="text-center py-12">
+        <svg class="mx-auto h-12 w-12 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
+        </svg>
+        <h3 class="mt-2 text-sm font-semibold text-gray-900">Keine PayPal-Konten</h3>
+        <p class="mt-1 text-sm text-gray-500">Füge dein erstes PayPal-Konto hinzu.</p>
+        <div class="mt-6">
+            <a href="/paypal/add" class="inline-flex items-center rounded-md bg-primary-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-primary-500">
+                PayPal hinzufügen
+            </a>
+        </div>
+    </div>
+    {% else %}
+    <div class="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
+        {% for account in accounts %}
+        <div class="bg-white rounded-lg shadow overflow-hidden hover:shadow-md transition-shadow">
+            <div class="p-6">
+                <div class="flex items-center">
+                    <div class="flex-shrink-0">
+                        <div class="h-12 w-12 rounded-full bg-blue-100 flex items-center justify-center">
+                            <svg class="h-6 w-6 text-blue-600" fill="currentColor" viewBox="0 0 24 24">
+                                <path d="M7.076 21.337H2.47a.641.641 0 0 1-.633-.74L4.944.901C5.026.382 5.474 0 5.998 0h7.46c2.57 0 4.578.543 5.69 1.81 1.01 1.15 1.304 2.42 1.012 4.287-.023.143-.047.288-.077.437-.983 5.05-4.349 6.797-8.647 6.797h-2.19a.971.971 0 0 0-.958.819l-.007.034-.737 4.669-.008.034a.64.64 0 0 1-.63.45z"/>
+                            </svg>
+                        </div>
+                    </div>
+                    <div class="ml-4 flex-1">
+                        <h3 class="text-lg font-medium text-gray-900">{{ account.name }}</h3>
+                        {% if account.email %}
+                        <p class="text-sm text-gray-500">{{ account.email }}</p>
+                        {% endif %}
+                    </div>
+                </div>
+                
+                <div class="mt-4 flex items-center justify-between">
+                    <div>
+                        <p class="text-sm text-gray-500">Saldo</p>
+                        <p class="text-2xl font-semibold {% if account.balance >= 0 %}text-green-600{% else %}text-red-600{% endif %}">
+                            {{ account.balance|default(0)|number_format(2, ',', '.') }} {{ account.currency|default('EUR') }}
+                        </p>
+                    </div>
+                    {% if account.last_sync %}
+                    <div class="text-right">
+                        <p class="text-xs text-gray-400">Letzter Sync</p>
+                        <p class="text-xs text-gray-500">{{ account.last_sync|date('d.m.Y H:i') }}</p>
+                    </div>
+                    {% endif %}
+                </div>
+                
+                <div class="mt-4 flex justify-end">
+                    <a href="/paypal/{{ account.id }}" class="text-sm font-medium text-primary-600 hover:text-primary-500">
+                        Details anzeigen →
+                    </a>
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+</div>
+{% endblock %}
