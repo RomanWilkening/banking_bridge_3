@@ -20,6 +20,7 @@ class SettingsController
     {
         $settings = [
             'fints_product_id' => $this->db->getSetting('fints_product_id', ''),
+            'transaction_history_days' => $this->db->getSetting('transaction_history_days', '90'),
             'mqtt_enabled' => $this->db->getSetting('mqtt_enabled', '0'),
             'mqtt_host' => $this->db->getSetting('mqtt_host', ''),
             'mqtt_port' => $this->db->getSetting('mqtt_port', '1883'),
@@ -48,6 +49,12 @@ class SettingsController
         // Save FinTS settings
         if (isset($data['fints_product_id'])) {
             $this->db->setSetting('fints_product_id', trim($data['fints_product_id']));
+        }
+        
+        // Save transaction history setting
+        if (isset($data['transaction_history_days'])) {
+            $days = max(7, min(365, (int) $data['transaction_history_days'])); // 7-365 days
+            $this->db->setSetting('transaction_history_days', (string) $days);
         }
 
         // Save MQTT settings
