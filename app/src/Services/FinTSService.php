@@ -709,40 +709,64 @@ class FinTSService
      */
     private function fetchTransactionsInternal(SEPAAccount $account, \DateTime $from, \DateTime $to): array
     {
-        // Always try MT940 first, then CAMT - BPD checks are unreliable
-        $errors = [];
-        $mt940Result = null;
+        // Check BPD for supported formats
+        $supportsMT940 = false;
+        $supportsCAMT = false;
         
-        // Try MT940 first
         try {
-            $getStatement = GetStatementOfAccount::create($account, $from, $to);
-            $this->finTs->execute($getStatement);
-
-            if (!$getStatement->needsTan()) {
-                $mt940Result = $this->processTransactionsResult($getStatement);
-                if ($mt940Result['success'] && count($mt940Result['transactions'] ?? []) > 0) {
-                    return $mt940Result;
+            $bpd = $this->finTs->getBpd();
+            if ($bpd) {
+                $mt940Params = $bpd->parameters['HIKAZS'] ?? [];
+                $camtParams = $bpd->parameters['HICAZS'] ?? [];
+                
+                foreach (array_keys($mt940Params) as $version) {
+                    if (in_array((int)$version, [4, 5, 6, 7])) {
+                        $supportsMT940 = true;
+                        break;
+                    }
+                }
+                
+                foreach (array_keys($camtParams) as $version) {
+                    if ((int)$version === 1) {
+                        $supportsCAMT = true;
+                        break;
+                    }
                 }
             }
-        } catch (\Throwable $e) {
-            $errors['MT940'] = $e->getMessage();
+        } catch (Exception $e) {
+            $supportsMT940 = true;
+            $supportsCAMT = true;
         }
 
-        // Try CAMT as fallback
-        try {
-            $result = $this->fetchTransactionsXML($account, $from, $to);
-            if (isset($result['success']) && $result['success']) {
-                if (count($result['transactions'] ?? []) > 0) {
+        $errors = [];
+        
+        // Try MT940
+        if ($supportsMT940) {
+            try {
+                $getStatement = GetStatementOfAccount::create($account, $from, $to);
+                $this->finTs->execute($getStatement);
+
+                if (!$getStatement->needsTan()) {
+                    $result = $this->processTransactionsResult($getStatement);
+                    if ($result['success'] && count($result['transactions'] ?? []) > 0) {
+                        return $result;
+                    }
+                }
+            } catch (\Throwable $e) {
+                $errors['MT940'] = $e->getMessage();
+            }
+        }
+
+        // Try CAMT
+        if ($supportsCAMT) {
+            try {
+                $result = $this->fetchTransactionsXML($account, $from, $to);
+                if (isset($result['success']) && $result['success']) {
                     return $result;
                 }
+            } catch (\Throwable $e) {
+                $errors['CAMT'] = $e->getMessage();
             }
-        } catch (\Throwable $e) {
-            $errors['CAMT'] = $e->getMessage();
-        }
-        
-        // Return MT940 result if available (even with 0 transactions)
-        if ($mt940Result !== null && ($mt940Result['success'] ?? false)) {
-            return $mt940Result;
         }
 
         return [
@@ -1340,68 +1364,103 @@ class FinTSService
 
         $this->logger->info('Found account, fetching transactions', ['iban' => $sepaAccount->getIban()]);
 
-        // Always try MT940 first, then CAMT - BPD checks are unreliable
+        // Check BPD for supported formats
+        $supportsMT940 = false;
+        $supportsCAMT = false;
+        
+        try {
+            $bpd = $this->finTs->getBpd();
+            if ($bpd) {
+                $mt940Params = $bpd->parameters['HIKAZS'] ?? [];
+                $camtParams = $bpd->parameters['HICAZS'] ?? [];
+                
+                foreach (array_keys($mt940Params) as $version) {
+                    if (in_array((int)$version, [4, 5, 6, 7])) {
+                        $supportsMT940 = true;
+                        break;
+                    }
+                }
+                
+                foreach (array_keys($camtParams) as $version) {
+                    if ((int)$version === 1) {
+                        $supportsCAMT = true;
+                        break;
+                    }
+                }
+                
+                $this->logger->info('Format support', ['mt940' => $supportsMT940, 'camt' => $supportsCAMT]);
+            }
+        } catch (Exception $e) {
+            $this->logger->warning('Could not check BPD', ['error' => $e->getMessage()]);
+            $supportsMT940 = true;
+            $supportsCAMT = true;
+        }
+
         $errors = [];
         $mt940Result = null;
         
-        // Try MT940 first
-        $this->logger->info('Trying MT940 format');
-        try {
-            $getStatement = GetStatementOfAccount::create($sepaAccount, $from, $to);
-            $this->finTs->execute($getStatement);
+        // Try MT940
+        if ($supportsMT940) {
+            $this->logger->info('Trying MT940 format');
+            try {
+                $getStatement = GetStatementOfAccount::create($sepaAccount, $from, $to);
+                $this->finTs->execute($getStatement);
 
-            if ($getStatement->needsTan()) {
-                $this->logger->info('MT940 requires TAN');
-                return [
-                    'success' => false,
-                    'needs_tan' => true,
-                    'tan_request' => $this->extractTanRequest($getStatement),
-                    'persisted_action' => base64_encode(serialize($getStatement)),
-                    'persisted_instance' => $this->finTs->persist()
-                ];
-            }
-
-            $mt940Result = $this->processTransactionsResult($getStatement);
-            if ($mt940Result['success']) {
-                $txCount = count($mt940Result['transactions'] ?? []);
-                $this->logger->info('MT940 successful', ['transactions' => $txCount]);
-                
-                if ($txCount > 0) {
-                    return $mt940Result;
+                if ($getStatement->needsTan()) {
+                    $this->logger->info('MT940 requires TAN');
+                    return [
+                        'success' => false,
+                        'needs_tan' => true,
+                        'tan_request' => $this->extractTanRequest($getStatement),
+                        'persisted_action' => base64_encode(serialize($getStatement)),
+                        'persisted_instance' => $this->finTs->persist()
+                    ];
                 }
-                $this->logger->info('MT940 returned 0 transactions, trying CAMT');
-            } else {
-                $errors['MT940'] = $mt940Result['message'] ?? 'Unbekannter Fehler';
+
+                $mt940Result = $this->processTransactionsResult($getStatement);
+                if ($mt940Result['success']) {
+                    $txCount = count($mt940Result['transactions'] ?? []);
+                    $this->logger->info('MT940 successful', ['transactions' => $txCount]);
+                    
+                    if ($txCount > 0) {
+                        return $mt940Result;
+                    }
+                    $this->logger->info('MT940 returned 0 transactions, trying CAMT');
+                } else {
+                    $errors['MT940'] = $mt940Result['message'] ?? 'Unbekannter Fehler';
+                }
+            } catch (\Throwable $e) {
+                $errors['MT940'] = $e->getMessage();
+                $this->logger->info('MT940 failed', ['error' => $e->getMessage()]);
             }
-        } catch (\Throwable $e) {
-            $errors['MT940'] = $e->getMessage();
-            $this->logger->info('MT940 failed', ['error' => $e->getMessage()]);
         }
 
-        // Try CAMT as fallback
+        // Try CAMT
         $camtResult = null;
-        $this->logger->info('Trying CAMT XML format');
-        try {
-            $camtResult = $this->fetchTransactionsXML($sepaAccount, $from, $to);
-            
-            if (isset($camtResult['success']) && $camtResult['success']) {
-                $txCount = count($camtResult['transactions'] ?? []);
-                $this->logger->info('CAMT successful', ['transactions' => $txCount]);
+        if ($supportsCAMT) {
+            $this->logger->info('Trying CAMT XML format');
+            try {
+                $camtResult = $this->fetchTransactionsXML($sepaAccount, $from, $to);
                 
-                if ($txCount > 0) {
+                if (isset($camtResult['success']) && $camtResult['success']) {
+                    $txCount = count($camtResult['transactions'] ?? []);
+                    $this->logger->info('CAMT successful', ['transactions' => $txCount]);
+                    
+                    if ($txCount > 0) {
+                        return $camtResult;
+                    }
+                }
+                if (isset($camtResult['needs_tan']) && $camtResult['needs_tan']) {
                     return $camtResult;
                 }
+                
+                if (!($camtResult['success'] ?? false)) {
+                    $errors['CAMT'] = $camtResult['message'] ?? 'Unbekannter Fehler';
+                }
+            } catch (\Throwable $e) {
+                $errors['CAMT'] = $e->getMessage();
+                $this->logger->warning('CAMT failed', ['error' => $e->getMessage()]);
             }
-            if (isset($camtResult['needs_tan']) && $camtResult['needs_tan']) {
-                return $camtResult;
-            }
-            
-            if (!($camtResult['success'] ?? false)) {
-                $errors['CAMT'] = $camtResult['message'] ?? 'Unbekannter Fehler';
-            }
-        } catch (\Throwable $e) {
-            $errors['CAMT'] = $e->getMessage();
-            $this->logger->warning('CAMT failed', ['error' => $e->getMessage()]);
         }
 
         // Return MT940 result even with 0 transactions
@@ -1944,74 +2003,117 @@ class FinTSService
                 'to' => $to->format('Y-m-d')
             ]);
 
-            // Always try MT940 first (most reliable), then CAMT as fallback
-            // BPD checks are unreliable - some banks report wrong capabilities
-            $errors = [];
-            $mt940Result = null;
+            // Determine which format to try based on what the bank supports
+            // Check BPD for supported formats
+            $supportsMT940 = false;
+            $supportsCAMT = false;
             
-            // Try MT940 first - always attempt regardless of BPD
-            $this->logger->info('Trying MT940 format');
             try {
-                $getStatement = GetStatementOfAccount::create($sepaAccount, $from, $to);
-                $this->finTs->execute($getStatement);
-
-                if ($getStatement->needsTan()) {
-                    $this->logger->info('GetStatementOfAccount requires TAN');
-                    return [
-                        'success' => false,
-                        'needs_tan' => true,
-                        'tan_request' => $this->extractTanRequest($getStatement),
-                        'persisted_action' => base64_encode(serialize($getStatement)),
-                        'persisted_instance' => $this->finTs->persist()
-                    ];
-                }
-
-                $mt940Result = $this->processTransactionsResult($getStatement);
-                if ($mt940Result['success']) {
-                    $txCount = count($mt940Result['transactions'] ?? []);
-                    $this->logger->info('MT940 fetch successful', ['transactions' => $txCount]);
+                $bpd = $this->finTs->getBpd();
+                if ($bpd) {
+                    $mt940Params = $bpd->parameters['HIKAZS'] ?? [];
+                    $camtParams = $bpd->parameters['HICAZS'] ?? [];
                     
-                    // If we got transactions, return them
-                    if ($txCount > 0) {
-                        $mt940Result['persisted_instance'] = $this->persistAfterClose();
-                        return $mt940Result;
+                    // Check if any MT940 version is supported by phpFinTS (4,5,6,7)
+                    foreach (array_keys($mt940Params) as $version) {
+                        if (in_array((int)$version, [4, 5, 6, 7])) {
+                            $supportsMT940 = true;
+                            break;
+                        }
                     }
-                    // If 0 transactions, try CAMT before returning (might have better data)
-                    $this->logger->info('MT940 returned 0 transactions, will try CAMT as well');
-                } else {
-                    $errors['MT940'] = $mt940Result['message'] ?? 'Unbekannter Fehler';
+                    
+                    // Check if CAMT version 1 is supported
+                    foreach (array_keys($camtParams) as $version) {
+                        if ((int)$version === 1) {
+                            $supportsCAMT = true;
+                            break;
+                        }
+                    }
+                    
+                    $this->logger->info('Format support detected', [
+                        'mt940' => $supportsMT940,
+                        'camt' => $supportsCAMT,
+                        'mt940_versions' => array_keys($mt940Params),
+                        'camt_versions' => array_keys($camtParams)
+                    ]);
                 }
-            } catch (\Throwable $e) {
-                $errors['MT940'] = $e->getMessage();
-                $this->logger->info('MT940 fetch failed', ['error' => $e->getMessage()]);
+            } catch (Exception $e) {
+                $this->logger->warning('Could not check BPD for format support', ['error' => $e->getMessage()]);
+                // Assume both are possible, will try MT940 first
+                $supportsMT940 = true;
+                $supportsCAMT = true;
             }
 
-            // Try CAMT XML as fallback (if MT940 didn't work or returned 0 transactions)
+            $errors = [];
+            
+            // Try MT940 first if supported
+            $mt940Result = null;
+            if ($supportsMT940) {
+                $this->logger->info('Trying MT940 format');
+                try {
+                    $getStatement = GetStatementOfAccount::create($sepaAccount, $from, $to);
+                    $this->finTs->execute($getStatement);
+
+                    if ($getStatement->needsTan()) {
+                        $this->logger->info('GetStatementOfAccount requires TAN');
+                        return [
+                            'success' => false,
+                            'needs_tan' => true,
+                            'tan_request' => $this->extractTanRequest($getStatement),
+                            'persisted_action' => base64_encode(serialize($getStatement)),
+                            'persisted_instance' => $this->finTs->persist()
+                        ];
+                    }
+
+                    $mt940Result = $this->processTransactionsResult($getStatement);
+                    if ($mt940Result['success']) {
+                        $txCount = count($mt940Result['transactions'] ?? []);
+                        $this->logger->info('MT940 fetch successful', ['transactions' => $txCount]);
+                        
+                        // If we got transactions, return them
+                        if ($txCount > 0) {
+                            $mt940Result['persisted_instance'] = $this->persistAfterClose();
+                            return $mt940Result;
+                        }
+                        // If 0 transactions, try CAMT before returning (might have better data)
+                        $this->logger->info('MT940 returned 0 transactions, will try CAMT as well');
+                    } else {
+                        $errors['MT940'] = $mt940Result['message'] ?? 'Unbekannter Fehler';
+                    }
+                } catch (\Throwable $e) {
+                    $errors['MT940'] = $e->getMessage();
+                    $this->logger->info('MT940 fetch failed', ['error' => $e->getMessage()]);
+                }
+            }
+
+            // Try CAMT XML if supported (and MT940 didn't work, had errors, or returned 0 transactions)
             $camtResult = null;
-            $this->logger->info('Trying CAMT XML format');
-            try {
-                $camtResult = $this->fetchTransactionsXML($sepaAccount, $from, $to);
-                
-                if (isset($camtResult['success']) && $camtResult['success']) {
-                    $txCount = count($camtResult['transactions'] ?? []);
-                    $this->logger->info('CAMT XML fetch successful', ['transactions' => $txCount]);
+            if ($supportsCAMT) {
+                $this->logger->info('Trying CAMT XML format');
+                try {
+                    $camtResult = $this->fetchTransactionsXML($sepaAccount, $from, $to);
                     
-                    // If CAMT has transactions, return it
-                    if ($txCount > 0) {
-                        $camtResult['persisted_instance'] = $this->persistAfterClose();
+                    if (isset($camtResult['success']) && $camtResult['success']) {
+                        $txCount = count($camtResult['transactions'] ?? []);
+                        $this->logger->info('CAMT XML fetch successful', ['transactions' => $txCount]);
+                        
+                        // If CAMT has transactions, return it
+                        if ($txCount > 0) {
+                            $camtResult['persisted_instance'] = $this->persistAfterClose();
+                            return $camtResult;
+                        }
+                    }
+                    if (isset($camtResult['needs_tan']) && $camtResult['needs_tan']) {
                         return $camtResult;
                     }
+                    
+                    if (!($camtResult['success'] ?? false)) {
+                        $errors['CAMT'] = $camtResult['message'] ?? 'Unbekannter Fehler';
+                    }
+                } catch (\Throwable $e) {
+                    $errors['CAMT'] = $e->getMessage();
+                    $this->logger->warning('CAMT XML fetch failed', ['error' => $e->getMessage()]);
                 }
-                if (isset($camtResult['needs_tan']) && $camtResult['needs_tan']) {
-                    return $camtResult;
-                }
-                
-                if (!($camtResult['success'] ?? false)) {
-                    $errors['CAMT'] = $camtResult['message'] ?? 'Unbekannter Fehler';
-                }
-            } catch (\Throwable $e) {
-                $errors['CAMT'] = $e->getMessage();
-                $this->logger->warning('CAMT XML fetch failed', ['error' => $e->getMessage()]);
             }
 
             // If MT940 was successful (even with 0 transactions), return that result
