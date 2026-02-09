@@ -1563,6 +1563,9 @@ class FinTSService
     private function fetchTransactionsXML(SEPAAccount $account, \DateTime $from, \DateTime $to): array
     {
         try {
+            // Debug: Log UPD information to understand why HKCAZ might be rejected
+            $this->debugLogUPD($account);
+            
             $this->logger->info('Creating CAMT XML statement request');
             $getStatement = GetStatementOfAccountXML::create($account, $from, $to);
             
@@ -1592,6 +1595,91 @@ class FinTSService
                 'success' => false,
                 'message' => $e->getMessage()
             ];
+        }
+    }
+    
+    /**
+     * Debug: Log UPD information to understand HKCAZ support
+     */
+    private function debugLogUPD(SEPAAccount $account): void
+    {
+        try {
+            // Access UPD via reflection since it's private
+            $reflection = new \ReflectionClass($this->finTs);
+            $updProperty = $reflection->getProperty('upd');
+            $updProperty->setAccessible(true);
+            $upd = $updProperty->getValue($this->finTs);
+            
+            if ($upd === null) {
+                $this->logger->warning('UPD DEBUG: UPD is NULL - this will cause CAMT to fail');
+                return;
+            }
+            
+            $this->logger->info('UPD DEBUG: UPD loaded', [
+                'upd_version' => $upd->getVersion(),
+                'hiupd_count' => count($upd->hiupd ?? [])
+            ]);
+            
+            // Log all HIUPD entries
+            foreach ($upd->hiupd as $idx => $hiupd) {
+                $accountNumber = null;
+                $iban = null;
+                
+                // Get account identifiers from HIUPD
+                if (property_exists($hiupd, 'kontoverbindung') && $hiupd->kontoverbindung) {
+                    $accountNumber = $hiupd->kontoverbindung->kontonummer ?? null;
+                }
+                if (property_exists($hiupd, 'iban')) {
+                    $iban = $hiupd->iban ?? null;
+                }
+                
+                // Get allowed operations
+                $allowedOps = [];
+                foreach ($hiupd->getErlaubteGeschaeftsvorfaelle() as $gv) {
+                    $allowedOps[] = $gv->getGeschaeftsvorfall();
+                }
+                
+                $this->logger->info('UPD DEBUG: HIUPD entry', [
+                    'index' => $idx,
+                    'account_number' => $accountNumber,
+                    'iban' => $iban,
+                    'allowed_ops_count' => count($allowedOps),
+                    'allowed_ops' => implode(', ', array_slice($allowedOps, 0, 20)), // First 20
+                    'has_HKCAZ' => in_array('HKCAZ', $allowedOps),
+                    'has_HKKAZ' => in_array('HKKAZ', $allowedOps) // MT940
+                ]);
+            }
+            
+            // Check if this specific account is found
+            $this->logger->info('UPD DEBUG: Looking for account', [
+                'search_iban' => $account->getIban(),
+                'search_account_number' => $account->getAccountNumber()
+            ]);
+            
+            // Try to find matching HIUPD
+            $found = false;
+            foreach ($upd->hiupd as $hiupd) {
+                if ($hiupd->matchesAccount($account)) {
+                    $found = true;
+                    $allowedOps = [];
+                    foreach ($hiupd->getErlaubteGeschaeftsvorfaelle() as $gv) {
+                        $allowedOps[] = $gv->getGeschaeftsvorfall();
+                    }
+                    $this->logger->info('UPD DEBUG: FOUND matching HIUPD for account', [
+                        'has_HKCAZ' => in_array('HKCAZ', $allowedOps),
+                        'has_HKKAZ' => in_array('HKKAZ', $allowedOps),
+                        'all_ops' => implode(', ', $allowedOps)
+                    ]);
+                    break;
+                }
+            }
+            
+            if (!$found) {
+                $this->logger->warning('UPD DEBUG: NO matching HIUPD found for account!');
+            }
+            
+        } catch (\Throwable $e) {
+            $this->logger->warning('UPD DEBUG: Could not access UPD', ['error' => $e->getMessage()]);
         }
     }
 
