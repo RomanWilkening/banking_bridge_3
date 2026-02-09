@@ -34,8 +34,21 @@ class HomeController
             $bank['total_balance'] = $totalBalance;
         }
         
+        // Get PayPal accounts
+        $paypalAccounts = $this->db->getAllPayPalAccounts();
+        
+        // Calculate total PayPal balance
+        $paypalTotalBalance = 0;
+        foreach ($paypalAccounts as $paypal) {
+            if ($paypal['balance'] !== null) {
+                $paypalTotalBalance += $paypal['balance'];
+            }
+        }
+        
         return $this->view->render($response, 'home.twig', [
             'banks' => $banks,
+            'paypal_accounts' => $paypalAccounts,
+            'paypal_total_balance' => $paypalTotalBalance,
             'title' => 'Dashboard'
         ]);
     }
