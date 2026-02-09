@@ -3,7 +3,7 @@ declare(strict_types=1);
 
 namespace App\Services;
 
-use Psr\Log\LoggerInterface;
+use Monolog\Logger;
 
 /**
  * PayPal Classic API (NVP) Service
@@ -15,11 +15,11 @@ class PayPalService
     private const API_ENDPOINT_SANDBOX = 'https://api-3t.sandbox.paypal.com/nvp';
     private const API_VERSION = '124.0';
     
-    private LoggerInterface $logger;
+    private Logger $logger;
     private DatabaseService $db;
     private bool $sandbox = false;
     
-    public function __construct(LoggerInterface $logger, DatabaseService $db)
+    public function __construct(Logger $logger, DatabaseService $db)
     {
         $this->logger = $logger;
         $this->db = $db;
