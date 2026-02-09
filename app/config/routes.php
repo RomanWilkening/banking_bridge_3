@@ -40,6 +40,7 @@ return function (App $app) {
     $app->get('/api/banks/{id}/capabilities', [ApiController::class, 'getBankCapabilities'])->setName('api.banks.capabilities');
     $app->post('/api/banks/{id}/tan', [ApiController::class, 'submitTan'])->setName('api.banks.tan');
     $app->post('/api/banks/{id}/decoupled', [ApiController::class, 'checkDecoupled'])->setName('api.banks.decoupled');
+    $app->post('/api/banks/{id}/reset-session', [ApiController::class, 'resetSession'])->setName('api.banks.resetSession');
     $app->get('/api/accounts/{id}/transactions', [ApiController::class, 'getTransactions'])->setName('api.accounts.transactions');
     $app->post('/api/accounts/{id}/sync', [ApiController::class, 'syncAccount'])->setName('api.accounts.sync');
     $app->post('/api/accounts/{id}/depot', [ApiController::class, 'syncDepotHoldings'])->setName('api.accounts.depot');
