@@ -1818,4 +1818,105 @@ class ApiController
             'mqtt_export' => $enabled
         ]);
     }
+    
+    // Database Maintenance Methods
+    
+    /**
+     * Get duplicate transactions summary
+     */
+    public function getDuplicates(Request $request, Response $response): Response
+    {
+        $queryParams = $request->getQueryParams();
+        $accountId = isset($queryParams['account_id']) ? (int) $queryParams['account_id'] : null;
+        $detailed = isset($queryParams['detailed']) && $queryParams['detailed'] === 'true';
+        
+        $summary = $this->db->getDuplicateSummary($accountId);
+        
+        $result = [
+            'success' => true,
+            'total_duplicate_groups' => $summary['total_duplicate_groups'],
+            'total_duplicate_transactions' => $summary['total_duplicate_transactions'],
+            'total_to_remove' => $summary['total_to_remove'],
+        ];
+        
+        if ($detailed) {
+            // Get full duplicate list with details
+            $duplicates = $this->db->findDuplicateTransactions($accountId);
+            $result['duplicates'] = $duplicates;
+        } else {
+            // Just return summary grouped info
+            $result['groups'] = array_map(function($g) {
+                return [
+                    'account_id' => (int) $g['account_id'],
+                    'booking_date' => $g['booking_date'],
+                    'amount' => (float) $g['amount'],
+                    'name' => $g['name'],
+                    'description' => substr($g['description'] ?? '', 0, 50) . (strlen($g['description'] ?? '') > 50 ? '...' : ''),
+                    'duplicate_count' => (int) $g['duplicate_count'],
+                    'keep_id' => (int) $g['keep_id'],
+                ];
+            }, $summary['groups']);
+        }
+        
+        return $this->jsonResponse($response, $result);
+    }
+    
+    /**
+     * Remove duplicate transactions
+     */
+    public function removeDuplicates(Request $request, Response $response): Response
+    {
+        $data = $request->getParsedBody() ?? [];
+        $accountId = isset($data['account_id']) ? (int) $data['account_id'] : null;
+        $dryRun = isset($data['dry_run']) && $data['dry_run'];
+        
+        // Get summary before removal
+        $summaryBefore = $this->db->getDuplicateSummary($accountId);
+        
+        if ($dryRun) {
+            return $this->jsonResponse($response, [
+                'success' => true,
+                'dry_run' => true,
+                'would_remove' => $summaryBefore['total_to_remove'],
+                'duplicate_groups' => $summaryBefore['total_duplicate_groups'],
+                'message' => "Würde {$summaryBefore['total_to_remove']} doppelte Transaktionen entfernen (von {$summaryBefore['total_duplicate_transactions']} in {$summaryBefore['total_duplicate_groups']} Gruppen)."
+            ]);
+        }
+        
+        // Actually remove duplicates
+        $removed = $this->db->removeDuplicateTransactions($accountId);
+        
+        $this->logger->info('Removed duplicate transactions', [
+            'removed' => $removed,
+            'account_id' => $accountId
+        ]);
+        
+        return $this->jsonResponse($response, [
+            'success' => true,
+            'removed' => $removed,
+            'message' => "{$removed} doppelte Transaktionen wurden entfernt."
+        ]);
+    }
+    
+    /**
+     * Regenerate transaction IDs with current algorithm
+     */
+    public function regenerateTransactionIds(Request $request, Response $response): Response
+    {
+        $data = $request->getParsedBody() ?? [];
+        $accountId = isset($data['account_id']) ? (int) $data['account_id'] : null;
+        
+        $count = $this->db->regenerateTransactionIds($accountId);
+        
+        $this->logger->info('Regenerated transaction IDs', [
+            'count' => $count,
+            'account_id' => $accountId
+        ]);
+        
+        return $this->jsonResponse($response, [
+            'success' => true,
+            'regenerated' => $count,
+            'message' => "Transaction-IDs für {$count} Transaktionen wurden neu generiert."
+        ]);
+    }
 }
