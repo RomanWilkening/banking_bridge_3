@@ -688,11 +688,22 @@ class ApiController
         }
 
         $params = $request->getQueryParams();
+        $total = $this->db->getTransactionCount($accountId);
+        
+        // If 'all' parameter is set, return all transactions
+        if (isset($params['all']) && $params['all']) {
+            $transactions = $this->db->getTransactionsByAccountId($accountId, $total, 0);
+            return $this->jsonResponse($response, [
+                'success' => true,
+                'transactions' => $transactions,
+                'total' => $total
+            ]);
+        }
+        
         $limit = min(100, max(1, (int) ($params['limit'] ?? 30)));
         $offset = max(0, (int) ($params['offset'] ?? 0));
 
         $transactions = $this->db->getTransactionsByAccountId($accountId, $limit, $offset);
-        $total = $this->db->getTransactionCount($accountId);
 
         return $this->jsonResponse($response, [
             'success' => true,
