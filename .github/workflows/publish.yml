@@ -2,7 +2,7 @@ name: Build & Push Docker image to GHCR
 
 on:
   push:
-    branches: ["main"]       # passe deine Default-Branch an
+    branches: ["**"]         # alle Branches bauen
     tags: ["v*.*.*"]         # semantische Tags publishen
   workflow_dispatch:         # manuell auslösbar
 
