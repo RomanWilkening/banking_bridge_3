@@ -482,8 +482,6 @@ class ApiController
                 'count' => count($result['transactions'])
             ]);
             
-            $txResult = ['new' => 0, 'updated' => 0, 'total' => 0];
-            
             $txResult = $this->db->saveTransactions($pendingSyncAccountId, $result['transactions']);
             $this->logger->info('Saved transactions after TAN', [
                 'new' => $txResult['new'],
