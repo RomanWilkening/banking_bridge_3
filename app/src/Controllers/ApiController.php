@@ -1241,10 +1241,34 @@ class ApiController
      */
     public function getCronStatus(Request $request, Response $response): Response
     {
-        // Check if cron daemon is running
+        // Check if cron daemon is running (try multiple detection methods)
         $cronRunning = false;
+        $output = [];
         exec('pgrep -x cron 2>/dev/null', $output, $returnCode);
-        $cronRunning = ($returnCode === 0);
+        if ($returnCode === 0) {
+            $cronRunning = true;
+        } else {
+            // Some systems use 'crond' instead of 'cron'
+            $output = [];
+            exec('pgrep -x crond 2>/dev/null', $output, $returnCode);
+            if ($returnCode === 0) {
+                $cronRunning = true;
+            } else {
+                // Fallback: check via pidof (works even without procps)
+                $output = [];
+                exec('pidof cron crond 2>/dev/null', $output, $returnCode);
+                if ($returnCode === 0) {
+                    $cronRunning = true;
+                } else {
+                    // Fallback: check if cron service is active
+                    $output = [];
+                    exec('service cron status 2>/dev/null', $output, $returnCode);
+                    if ($returnCode === 0) {
+                        $cronRunning = true;
+                    }
+                }
+            }
+        }
 
         // Check cron configuration files
         $cronFiles = [];
