@@ -803,7 +803,7 @@ class FinTSService
     /**
      * Submit TAN and continue action
      */
-    public function submitTan(array $bankConfig, string $persistedInstance, string $persistedAction, string $tan): array
+    public function submitTan(array $bankConfig, string $persistedInstance, string $persistedAction, string $tan, ?array $syncContext = null, ?array $syncAllContext = null): array
     {
         try {
             $options = $this->createOptions($bankConfig);
@@ -829,6 +829,22 @@ class FinTSService
                 return $this->processAccountsResult($action);
             }
 
+            // Handle completed transaction fetch (MT940)
+            if ($action instanceof GetStatementOfAccount) {
+                $this->logger->info('TAN accepted for GetStatementOfAccount - processing transactions');
+                $result = $this->processTransactionsResult($action);
+                $result['persisted_instance'] = $this->persistAfterClose();
+                return $result;
+            }
+
+            // Handle completed transaction fetch (CAMT XML)
+            if ($action instanceof GetStatementOfAccountXML) {
+                $this->logger->info('TAN accepted for GetStatementOfAccountXML - processing transactions');
+                $result = $this->processTransactionsXMLResult($action);
+                $result['persisted_instance'] = $this->persistAfterClose();
+                return $result;
+            }
+
             // If this was a login action, now fetch the accounts
             // Check if this is a login/dialog action by checking if we can now get accounts
             try {
@@ -843,6 +859,25 @@ class FinTSService
                         'persisted_action' => base64_encode(serialize($getSepaAccounts)),
                         'persisted_instance' => $this->finTs->persist()
                     ];
+                }
+
+                // If we have a syncAll context, continue with full sync in this session
+                if ($syncAllContext !== null && !empty($syncAllContext)) {
+                    $this->logger->info('=== Continuing with FULL SYNC after TAN ===', [
+                        'accounts_count' => count($syncAllContext)
+                    ]);
+                    return $this->continueSyncAllAfterTan($getSepaAccounts->getAccounts(), $syncAllContext);
+                }
+
+                // If we have a sync context, continue with transaction fetching in this session
+                if ($syncContext !== null) {
+                    $this->logger->info('Continuing with transaction sync after TAN', $syncContext);
+                    return $this->continueWithTransactionFetch(
+                        $getSepaAccounts->getAccounts(),
+                        $syncContext['account_identifier'],
+                        $syncContext['from'],
+                        $syncContext['to']
+                    );
                 }
 
                 return $this->processAccountsResult($getSepaAccounts);
@@ -1041,6 +1076,22 @@ class FinTSService
             // Confirmation received - process the result
             if ($action instanceof GetSEPAAccounts) {
                 return $this->processAccountsResult($action);
+            }
+
+            // Handle completed transaction fetch (MT940)
+            if ($action instanceof GetStatementOfAccount) {
+                $this->logger->info('Decoupled TAN accepted for GetStatementOfAccount - processing transactions');
+                $result = $this->processTransactionsResult($action);
+                $result['persisted_instance'] = $this->persistAfterClose();
+                return $result;
+            }
+
+            // Handle completed transaction fetch (CAMT XML)
+            if ($action instanceof GetStatementOfAccountXML) {
+                $this->logger->info('Decoupled TAN accepted for GetStatementOfAccountXML - processing transactions');
+                $result = $this->processTransactionsXMLResult($action);
+                $result['persisted_instance'] = $this->persistAfterClose();
+                return $result;
             }
 
             // If this was a login action, now fetch the accounts
