@@ -1571,13 +1571,12 @@ class FinTSService
 
             $this->logger->info('HKCAZ not listed in UPD for account, patching UPD to allow CAMT');
 
-            // Create a fake ErlaubteGeschaeftsvorfaelle entry for HKCAZ
-            $fakeGv = new class implements \Fhp\Segment\HIUPD\ErlaubteGeschaeftsvorfaelle {
-                public function getGeschaeftsvorfall(): string
-                {
-                    return 'HKCAZ';
-                }
-            };
+            // Create a proper ErlaubteGeschaeftsvorfaelle entry for HKCAZ
+            // Must use a concrete class extending BaseDeg, not an anonymous class,
+            // because Serializer::serializeDeg() requires BaseDeg instances.
+            $fakeGv = new \Fhp\Segment\HIUPD\ErlaubteGeschaeftsvorfaelleV1();
+            $fakeGv->geschaeftsvorfall = 'HKCAZ';
+            $fakeGv->anzahlBenoetigterSignaturen = 0;
 
             // Try to find and patch the matching HIUPD entry
             $hiupd = $upd->findHiupd($account);
