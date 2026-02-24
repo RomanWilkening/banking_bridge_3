@@ -1542,6 +1542,87 @@ class FinTSService
     }
 
     /**
+     * Ensure UPD allows HKCAZ (CAMT) for the given account.
+     * 
+     * Some banks (e.g. MLP) support CAMT in BPD (HICAZS) but don't list HKCAZ
+     * in the per-account UPD (HIUPD). The phpFinTS library checks UPD before
+     * sending the request, which causes an UnsupportedException.
+     * 
+     * This method patches the UPD to add HKCAZ permission when BPD confirms
+     * the bank supports CAMT.
+     */
+    private function ensureCAMTSupportInUPD(SEPAAccount $account): void
+    {
+        try {
+            $reflection = new \ReflectionClass($this->finTs);
+            $updProperty = $reflection->getProperty('upd');
+            $updProperty->setAccessible(true);
+            $upd = $updProperty->getValue($this->finTs);
+
+            if ($upd === null) {
+                $this->logger->warning('UPD is null, cannot ensure CAMT support');
+                return;
+            }
+
+            // Already supported — nothing to do
+            if ($upd->isRequestSupportedForAccount($account, 'HKCAZ')) {
+                return;
+            }
+
+            $this->logger->info('HKCAZ not listed in UPD for account, patching UPD to allow CAMT');
+
+            // Create a fake ErlaubteGeschaeftsvorfaelle entry for HKCAZ
+            $fakeGv = new class implements \Fhp\Segment\HIUPD\ErlaubteGeschaeftsvorfaelle {
+                public function getGeschaeftsvorfall(): string
+                {
+                    return 'HKCAZ';
+                }
+            };
+
+            // Try to find and patch the matching HIUPD entry
+            $hiupd = $upd->findHiupd($account);
+            if ($hiupd !== null) {
+                // HIUPD exists for this account but HKCAZ is not listed
+                if (property_exists($hiupd, 'erlaubteGeschaeftsvorfaelle')) {
+                    if ($hiupd->erlaubteGeschaeftsvorfaelle === null) {
+                        $hiupd->erlaubteGeschaeftsvorfaelle = [];
+                    }
+                    $hiupd->erlaubteGeschaeftsvorfaelle[] = $fakeGv;
+                    $this->logger->info('Added HKCAZ to existing HIUPD entry for account');
+                }
+            } else {
+                // No matching HIUPD found — add a synthetic HIUPD entry
+                $fakeHiupd = new class($account, $fakeGv) implements \Fhp\Segment\HIUPD\HIUPD {
+                    private SEPAAccount $account;
+                    private array $gvList;
+
+                    public function __construct(SEPAAccount $account, \Fhp\Segment\HIUPD\ErlaubteGeschaeftsvorfaelle $gv)
+                    {
+                        $this->account = $account;
+                        $this->gvList = [$gv];
+                    }
+
+                    public function matchesAccount(SEPAAccount $other): bool
+                    {
+                        return $other->getIban() === $this->account->getIban()
+                            || $other->getAccountNumber() === $this->account->getAccountNumber();
+                    }
+
+                    public function getErlaubteGeschaeftsvorfaelle(): array
+                    {
+                        return $this->gvList;
+                    }
+                };
+
+                $upd->hiupd[] = $fakeHiupd;
+                $this->logger->info('Added synthetic HIUPD entry with HKCAZ for account');
+            }
+        } catch (\Throwable $e) {
+            $this->logger->warning('Failed to ensure CAMT support in UPD', ['error' => $e->getMessage()]);
+        }
+    }
+
+    /**
      * Fetch transactions using CAMT XML format
      */
     private function fetchTransactionsXML(SEPAAccount $account, \DateTime $from, \DateTime $to): array
@@ -1549,6 +1630,10 @@ class FinTSService
         try {
             // Debug: Log UPD information to understand why HKCAZ might be rejected
             $this->debugLogUPD($account);
+
+            // Ensure UPD allows HKCAZ for this account (some banks don't list it
+            // in per-account HIUPD even though BPD supports CAMT)
+            $this->ensureCAMTSupportInUPD($account);
             
             $this->logger->info('Creating CAMT XML statement request');
             $getStatement = GetStatementOfAccountXML::create($account, $from, $to);
