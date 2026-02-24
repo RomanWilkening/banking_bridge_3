@@ -41,15 +41,44 @@
             </div>
         </div>
         
-        <div class="px-4 py-3 bg-gray-50 flex justify-between items-center">
-            <div>
-                <span class="text-sm text-gray-500">{{ pagination.total_items }} Transaktionen gespeichert</span>
+        <div class="px-4 py-3 bg-gray-50 space-y-3">
+            <div class="flex justify-between items-center">
+                <div>
+                    <span class="text-sm text-gray-500">{{ pagination.total_items }} Transaktionen gespeichert</span>
+                </div>
+                <button @click="syncTransactions" :disabled="syncing"
+                        class="inline-flex items-center rounded-md bg-primary-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-primary-500 disabled:opacity-50">
+                    <span x-show="syncing" class="loading-spinner mr-2"></span>
+                    <span x-text="syncing ? 'Synchronisiere...' : 'Transaktionen abrufen'"></span>
+                </button>
             </div>
-            <button @click="syncTransactions" :disabled="syncing"
-                    class="inline-flex items-center rounded-md bg-primary-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-primary-500 disabled:opacity-50">
-                <span x-show="syncing" class="loading-spinner mr-2"></span>
-                <span x-text="syncing ? 'Synchronisiere...' : 'Transaktionen abrufen'"></span>
-            </button>
+            <div class="flex flex-wrap items-end gap-3">
+                <div>
+                    <label class="block text-xs font-medium text-gray-500 mb-1">Zeitraum</label>
+                    <select x-model="dateRange" @change="onDateRangeChange"
+                            class="block rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 text-sm border px-3 py-1.5">
+                        <option value="30">Letzte 30 Tage</option>
+                        <option value="90">Letzte 90 Tage</option>
+                        <option value="365">Letztes Jahr</option>
+                        <option value="custom">Benutzerdefiniert</option>
+                    </select>
+                </div>
+                <div x-show="dateRange === 'custom'" x-cloak class="flex items-end gap-2">
+                    <div>
+                        <label class="block text-xs font-medium text-gray-500 mb-1">Von</label>
+                        <input type="date" x-model="customFrom"
+                               class="block rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 text-sm border px-3 py-1.5">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-gray-500 mb-1">Bis</label>
+                        <input type="date" x-model="customTo"
+                               class="block rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 text-sm border px-3 py-1.5">
+                    </div>
+                </div>
+                <p x-show="dateRange !== '30'" x-cloak class="text-xs text-amber-600">
+                    ⚠ Bei längeren Zeiträumen kann eine TAN-Eingabe erforderlich sein.
+                </p>
+            </div>
         </div>
     </div>
 
@@ -292,21 +321,39 @@ function accountDetails(accountId, bankId) {
         isDecoupled: false,
         pollingInterval: null,
         message: null,
+        dateRange: '30',
+        customFrom: new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+        customTo: new Date().toISOString().split('T')[0],
+
+        onDateRangeChange() {
+            // Reset custom dates when switching to a preset
+            if (this.dateRange !== 'custom') {
+                this.customTo = new Date().toISOString().split('T')[0];
+            }
+        },
+
+        getDateRange() {
+            const to = new Date().toISOString().split('T')[0];
+            if (this.dateRange === 'custom') {
+                return { from: this.customFrom, to: this.customTo };
+            }
+            const days = parseInt(this.dateRange);
+            const from = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+            return { from, to };
+        },
 
         async syncTransactions() {
             this.syncing = true;
             this.message = null;
 
             try {
+                const { from, to } = this.getDateRange();
                 const response = await fetch(`/api/accounts/${this.accountId}/sync`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
                     },
-                    body: JSON.stringify({
-                        from: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-                        to: new Date().toISOString().split('T')[0]
-                    })
+                    body: JSON.stringify({ from, to })
                 });
                 const data = await response.json();
 
