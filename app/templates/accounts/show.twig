@@ -55,7 +55,7 @@
             <div class="flex flex-wrap items-end gap-3">
                 <div>
                     <label class="block text-xs font-medium text-gray-500 mb-1">Zeitraum</label>
-                    <select x-model="dateRange" @change="onDateRangeChange"
+                    <select x-model="dateRange"
                             class="block rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 text-sm border px-3 py-1.5">
                         <option value="30">Letzte 30 Tage</option>
                         <option value="90">Letzte 90 Tage</option>
@@ -325,20 +325,13 @@ function accountDetails(accountId, bankId) {
         customFrom: new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
         customTo: new Date().toISOString().split('T')[0],
 
-        onDateRangeChange() {
-            // Reset custom dates when switching to a preset
-            if (this.dateRange !== 'custom') {
-                this.customTo = new Date().toISOString().split('T')[0];
-            }
-        },
-
         getDateRange() {
-            const to = new Date().toISOString().split('T')[0];
             if (this.dateRange === 'custom') {
                 return { from: this.customFrom, to: this.customTo };
             }
             const days = parseInt(this.dateRange);
             const from = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+            const to = new Date().toISOString().split('T')[0];
             return { from, to };
         },
 
