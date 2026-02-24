@@ -1071,8 +1071,24 @@ function bankDetails(bankId) {
                     }
                 } else if (data.success) {
                     this.showTanModal = false;
-                    this.message = { type: 'success', text: 'Konten erfolgreich abgerufen!' };
-                    setTimeout(() => location.reload(), 1000);
+                    if (data.stats) {
+                        const stats = data.stats;
+                        let msg = '✓ Synchronisierung abgeschlossen: ';
+                        const parts = [];
+                        if (stats.balances_updated > 0) parts.push(`${stats.balances_updated} Salden`);
+                        if (stats.transactions_new > 0) parts.push(`${stats.transactions_new} neue Transaktionen`);
+                        if (stats.transactions_updated > 0) parts.push(`${stats.transactions_updated} aktualisiert`);
+                        msg += parts.length > 0 ? parts.join(', ') : 'Keine Änderungen';
+                        this.message = { type: 'success', text: msg };
+                    } else if (data.new_count !== undefined) {
+                        const msg = data.new_count > 0 
+                            ? `${data.new_count} neue Transaktionen, ${data.updated_count || 0} aktualisiert`
+                            : `${data.count || 0} Transaktionen geprüft (keine neuen)`;
+                        this.message = { type: 'success', text: msg };
+                    } else {
+                        this.message = { type: 'success', text: data.message || 'TAN akzeptiert' };
+                    }
+                    setTimeout(() => location.reload(), 1500);
                 } else {
                     this.message = { type: 'error', text: data.message || 'TAN-Fehler' };
                     this.showTanModal = false;

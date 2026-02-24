@@ -448,6 +448,36 @@ class ApiController
             ], 400);
         }
 
+        // Build sync context if there's a pending sync operation
+        $syncContext = null;
+        $syncAllContext = null;
+        $pendingSyncAccountId = $_SESSION['fints_sync_account_id'] ?? null;
+        $pendingSyncAllBankId = $_SESSION['fints_sync_all_bank_id'] ?? null;
+
+        if ($pendingSyncAllBankId && (int)$pendingSyncAllBankId === $bankId) {
+            $accounts = $this->db->getAccountsByBankId($bankId);
+            if (!empty($accounts)) {
+                $syncAllContext = $accounts;
+            }
+        } elseif ($pendingSyncAccountId) {
+            $account = $this->db->getAccountById($pendingSyncAccountId);
+            if ($account) {
+                try {
+                    $syncFrom = isset($_SESSION['fints_sync_from']) ? new \DateTime($_SESSION['fints_sync_from']) : new \DateTime('-30 days');
+                    $syncTo = isset($_SESSION['fints_sync_to']) ? new \DateTime($_SESSION['fints_sync_to']) : new \DateTime();
+                } catch (\Exception $e) {
+                    $syncFrom = new \DateTime('-30 days');
+                    $syncTo = new \DateTime();
+                }
+                $syncContext = [
+                    'account_identifier' => $account['iban'] ?? $account['account_number'],
+                    'from' => $syncFrom,
+                    'to' => $syncTo,
+                    'account_id' => $pendingSyncAccountId
+                ];
+            }
+        }
+
         $result = $this->fintsService->submitTan(
             [
                 'bank_code' => $bank['bank_code'],
@@ -457,7 +487,9 @@ class ApiController
             ],
             $session['session_data'],
             $persistedAction,
-            $data['tan']
+            $data['tan'],
+            $syncContext,
+            $syncAllContext
         );
 
         // Handle another TAN requirement
@@ -474,6 +506,21 @@ class ApiController
 
         // Clean up session
         unset($_SESSION['fints_action_' . $bankId]);
+
+        // Handle syncAll result
+        if ($result['success'] && isset($result['is_sync_all']) && $result['is_sync_all']) {
+            $this->logger->info('Processing syncAll results after TAN submission', [
+                'has_results' => isset($result['results'])
+            ]);
+            
+            // Clean up session markers
+            unset($_SESSION['fints_sync_account_id']);
+            unset($_SESSION['fints_sync_all_bank_id']);
+            unset($_SESSION['fints_sync_from']);
+            unset($_SESSION['fints_sync_to']);
+            
+            return $this->processSyncAllResults($bankId, $result, $response);
+        }
 
         // Handle transaction sync result (has 'transactions' key)
         $pendingSyncAccountId = $_SESSION['fints_sync_account_id'] ?? null;
