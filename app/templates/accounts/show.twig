@@ -435,8 +435,17 @@ function accountDetails(accountId, bankId) {
                     }
                 } else if (data.success) {
                     this.showTanModal = false;
-                    // After TAN, try syncing again
-                    this.syncTransactions();
+                    if (data.new_count !== undefined) {
+                        // TAN response already contains transaction results
+                        const msg = data.new_count > 0 
+                            ? `${data.new_count} neue Transaktionen, ${data.updated_count} aktualisiert`
+                            : `${data.count} Transaktionen geprüft (keine neuen)`;
+                        this.message = { type: 'success', text: msg };
+                        setTimeout(() => location.reload(), 1500);
+                    } else {
+                        // After TAN, try syncing again
+                        this.syncTransactions();
+                    }
                 } else {
                     this.message = { type: 'error', text: data.message || 'TAN-Fehler' };
                     this.showTanModal = false;

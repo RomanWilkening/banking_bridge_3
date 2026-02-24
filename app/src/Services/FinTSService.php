@@ -829,6 +829,22 @@ class FinTSService
                 return $this->processAccountsResult($action);
             }
 
+            // Handle completed transaction fetch (MT940)
+            if ($action instanceof GetStatementOfAccount) {
+                $this->logger->info('TAN accepted for GetStatementOfAccount - processing transactions');
+                $result = $this->processTransactionsResult($action);
+                $result['persisted_instance'] = $this->persistAfterClose();
+                return $result;
+            }
+
+            // Handle completed transaction fetch (CAMT XML)
+            if ($action instanceof GetStatementOfAccountXML) {
+                $this->logger->info('TAN accepted for GetStatementOfAccountXML - processing transactions');
+                $result = $this->processTransactionsXMLResult($action);
+                $result['persisted_instance'] = $this->persistAfterClose();
+                return $result;
+            }
+
             // If this was a login action, now fetch the accounts
             // Check if this is a login/dialog action by checking if we can now get accounts
             try {
