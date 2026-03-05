@@ -1458,7 +1458,7 @@ class ApiController
     }
 
     /**
-     * Read last N lines from a log file
+     * Read last N lines from a log file (memory-efficient using tail)
      */
     private function readLastLogLines(string $path, int $lines = 10): array
     {
@@ -1466,12 +1466,17 @@ class ApiController
             return [];
         }
 
-        $content = file($path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
-        if ($content === false) {
+        $lines = max(1, (int) $lines);
+        $escapedPath = escapeshellarg($path);
+        $escapedLines = escapeshellarg((string) $lines);
+        $output = [];
+        exec("tail -n {$escapedLines} {$escapedPath} 2>/dev/null", $output, $returnCode);
+
+        if ($returnCode !== 0) {
             return [];
         }
 
-        return array_slice($content, -$lines);
+        return array_values(array_filter($output, fn($line) => trim($line) !== ''));
     }
 
     /**

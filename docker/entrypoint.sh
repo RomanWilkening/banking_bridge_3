@@ -50,6 +50,18 @@ touch /var/log/auto-sync.log /var/log/mqtt-publish.log /var/log/cron.log
 chown www-data:www-data /var/log/auto-sync.log /var/log/mqtt-publish.log
 chmod 666 /var/log/auto-sync.log /var/log/mqtt-publish.log /var/log/cron.log
 
+# Truncate log files on startup to prevent unbounded growth across container restarts
+for logfile in /var/log/auto-sync.log /var/log/mqtt-publish.log; do
+    if [ -f "$logfile" ]; then
+        filesize=$(stat -c%s "$logfile" 2>/dev/null || echo 0)
+        if [ "$filesize" -gt 1048576 ]; then
+            tail -n 100 "$logfile" > "$logfile.tmp" && mv "$logfile.tmp" "$logfile"
+            chown www-data:www-data "$logfile"
+            chmod 666 "$logfile"
+        fi
+    fi
+done
+
 # Validate cron files
 echo "Validating cron configuration..."
 for f in /etc/cron.d/auto-sync /etc/cron.d/mqtt-publish; do
