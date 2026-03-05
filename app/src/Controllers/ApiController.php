@@ -1381,8 +1381,11 @@ class ApiController
             }
         }
 
-        // Check system cron log
+        // Check system cron log (try syslog first, then cron.log)
         $cronSyslog = $this->readLastLogLines('/var/log/syslog', 20);
+        if (empty($cronSyslog)) {
+            $cronSyslog = $this->readLastLogLines('/var/log/cron.log', 20);
+        }
         $cronSyslog = array_filter($cronSyslog, fn($line) => stripos($line, 'cron') !== false || stripos($line, 'CRON') !== false);
 
         // Auto-sync status

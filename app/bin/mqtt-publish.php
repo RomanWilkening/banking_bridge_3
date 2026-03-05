@@ -21,6 +21,24 @@ use Monolog\Handler\StreamHandler;
 $logger = new Logger('mqtt-publish');
 $logger->pushHandler(new StreamHandler('php://stdout', Logger::INFO));
 
+// Lock file to prevent concurrent runs
+$lockFile = '/tmp/mqtt-publish.lock';
+$lockFp = fopen($lockFile, 'w');
+if ($lockFp === false || !flock($lockFp, LOCK_EX | LOCK_NB)) {
+    $logger->debug('Another mqtt-publish instance is already running, skipping');
+    exit(0);
+}
+
+// Rotate log file if it exceeds 1MB
+$logFile = '/var/log/mqtt-publish.log';
+if (file_exists($logFile) && filesize($logFile) > 1048576) {
+    $lastLines = [];
+    exec('tail -n 100 ' . escapeshellarg($logFile) . ' 2>/dev/null', $lastLines);
+    file_put_contents($logFile, implode("\n", $lastLines) . "\n");
+}
+
+$db = null;
+
 try {
     // Initialize database
     $dataPath = getenv('DATA_PATH') ?: '/data';
@@ -87,14 +105,16 @@ try {
 } catch (\Throwable $e) {
     $logger->error('MQTT publish error: ' . $e->getMessage());
     
-    // Save error status
-    try {
-        $db->setSetting('mqtt_last_status', 'error');
-        $db->setSetting('mqtt_last_error', $e->getMessage());
-        $db->setSetting('mqtt_last_publish', date('d.m.Y H:i:s'));
-        $db->setSetting('mqtt_last_publish_timestamp', (string) time());
-    } catch (\Throwable $e2) {
-        // Ignore
+    // Save error status (only if $db was initialized)
+    if ($db !== null) {
+        try {
+            $db->setSetting('mqtt_last_status', 'error');
+            $db->setSetting('mqtt_last_error', $e->getMessage());
+            $db->setSetting('mqtt_last_publish', date('d.m.Y H:i:s'));
+            $db->setSetting('mqtt_last_publish_timestamp', (string) time());
+        } catch (\Throwable $e2) {
+            // Ignore
+        }
     }
     
     exit(1);

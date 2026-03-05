@@ -24,6 +24,24 @@ $logger->pushHandler(new StreamHandler('php://stdout', Logger::INFO));
 
 $logger->info('=== AUTO SYNC CRON STARTED ===');
 
+// Lock file to prevent concurrent runs
+$lockFile = '/tmp/auto-sync.lock';
+$lockFp = fopen($lockFile, 'w');
+if ($lockFp === false || !flock($lockFp, LOCK_EX | LOCK_NB)) {
+    $logger->info('Another auto-sync instance is already running, skipping');
+    exit(0);
+}
+
+// Rotate log file if it exceeds 1MB
+$logFile = '/var/log/auto-sync.log';
+if (file_exists($logFile) && filesize($logFile) > 1048576) {
+    $lastLines = [];
+    exec('tail -n 100 ' . escapeshellarg($logFile) . ' 2>/dev/null', $lastLines);
+    file_put_contents($logFile, implode("\n", $lastLines) . "\n");
+}
+
+$db = null;
+
 try {
     // Initialize database
     $dataPath = getenv('DATA_PATH') ?: '/data';
@@ -236,14 +254,16 @@ try {
 } catch (\Throwable $e) {
     $logger->error('Fatal error: ' . $e->getMessage());
     
-    // Save error status
-    try {
-        $db->setSetting('auto_sync_last_status', 'error');
-        $db->setSetting('auto_sync_last_error', $e->getMessage());
-        $db->setSetting('auto_sync_last_run', date('d.m.Y H:i'));
-        $db->setSetting('auto_sync_last_run_timestamp', (string) time());
-    } catch (\Throwable $e2) {
-        // Ignore
+    // Save error status (only if $db was initialized)
+    if ($db !== null) {
+        try {
+            $db->setSetting('auto_sync_last_status', 'error');
+            $db->setSetting('auto_sync_last_error', $e->getMessage());
+            $db->setSetting('auto_sync_last_run', date('d.m.Y H:i'));
+            $db->setSetting('auto_sync_last_run_timestamp', (string) time());
+        } catch (\Throwable $e2) {
+            // Ignore
+        }
     }
     
     exit(1);
