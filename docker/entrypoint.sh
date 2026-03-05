@@ -72,7 +72,6 @@ done
 
 # Start cron daemon with logging
 echo "Starting cron daemon..."
-# Use -f to stay in foreground but we run it in background
 # Log to /var/log/cron.log since rsyslog is not available in this container
 cron -L 15 2>/var/log/cron.log
 sleep 2
