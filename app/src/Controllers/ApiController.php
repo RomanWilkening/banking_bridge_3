@@ -1560,7 +1560,7 @@ class ApiController
     // =====================================
     
     /**
-     * Update bank (rename)
+     * Update bank (rename and/or update credentials)
      * PATCH /api/banks/{id}
      */
     public function updateBank(Request $request, Response $response, array $args): Response
@@ -1579,6 +1579,14 @@ class ApiController
         
         if (isset($data['name']) && !empty(trim($data['name']))) {
             $this->db->renameBank($bankId, $data['name']);
+        }
+        
+        // Update credentials if provided
+        $username = isset($data['username']) && !empty(trim($data['username'])) ? trim($data['username']) : null;
+        $password = isset($data['password']) && !empty(trim($data['password'])) ? trim($data['password']) : null;
+        
+        if ($username !== null || $password !== null) {
+            $this->db->updateBankCredentials($bankId, $username, $password);
         }
         
         return $this->jsonResponse($response, [
