@@ -68,7 +68,7 @@
                     <dd class="mt-1 text-sm text-gray-900 flex items-center gap-2">
                         <span x-show="!editing" x-text="displayValue"></span>
                         <input x-show="editing" x-model="editValue" @keyup.enter="save" @keyup.escape="cancel"
-                               x-ref="credInput" type="text"
+                               x-ref="credInput" type="text" aria-label="Benutzerkennung bearbeiten"
                                class="text-sm text-gray-900 border-b border-primary-500 focus:outline-none bg-transparent">
                         <button x-show="!editing" @click="edit" class="text-gray-400 hover:text-primary-500" title="Bearbeiten">
                             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -84,7 +84,7 @@
                     <dd class="mt-1 text-sm text-gray-900 flex items-center gap-2">
                         <span x-show="!editing" x-text="displayValue"></span>
                         <input x-show="editing" x-model="editValue" @keyup.enter="save" @keyup.escape="cancel"
-                               x-ref="credInput" type="password" placeholder="Neues Passwort eingeben"
+                               x-ref="credInput" type="password" placeholder="Neues Passwort eingeben" aria-label="PIN/Passwort bearbeiten"
                                class="text-sm text-gray-900 border-b border-primary-500 focus:outline-none bg-transparent">
                         <button x-show="!editing" @click="edit" class="text-gray-400 hover:text-primary-500" title="Bearbeiten">
                             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
