@@ -79,6 +79,77 @@
         </div>
     </div>
 
+    <!-- TAN Session Validity Card -->
+    <div class="bg-white shadow rounded-lg overflow-hidden">
+        <div class="px-4 py-4 sm:px-6 border-b border-gray-200">
+            <h3 class="text-lg font-medium leading-6 text-gray-900">
+                <span class="mr-2">🔐</span> TAN-Session / Authentifizierung
+            </h3>
+            <p class="mt-1 text-sm text-gray-500">Status der starken Kundenauthentifizierung (PSD2 SCA)</p>
+        </div>
+        <div class="px-4 py-4 sm:px-6">
+            {% if tan_session %}
+            <div class="space-y-3">
+                <div class="flex items-center justify-between">
+                    <span class="text-sm text-gray-500">Status</span>
+                    {% if tan_session.is_valid %}
+                    <span class="inline-flex items-center rounded-full bg-green-100 px-3 py-1 text-sm font-medium text-green-800">✓ Aktiv</span>
+                    {% else %}
+                    <span class="inline-flex items-center rounded-full bg-red-100 px-3 py-1 text-sm font-medium text-red-800">✗ Abgelaufen</span>
+                    {% endif %}
+                </div>
+                <div class="flex items-center justify-between">
+                    <span class="text-sm text-gray-500">Letzte TAN-Bestätigung</span>
+                    <span class="text-sm text-gray-900">{{ tan_session.created_at }}</span>
+                </div>
+                <div class="flex items-center justify-between">
+                    <span class="text-sm text-gray-500">Gültig bis</span>
+                    <span class="text-sm text-gray-900">{{ tan_session.expires_at }}</span>
+                </div>
+                <div class="flex items-center justify-between">
+                    <span class="text-sm text-gray-500">Verbleibend</span>
+                    <span class="text-sm font-medium {% if tan_session.remaining_days > 14 %}text-green-600{% elseif tan_session.remaining_days > 3 %}text-yellow-600{% else %}text-red-600{% endif %}">
+                        {{ tan_session.remaining_days }} Tage
+                    </span>
+                </div>
+                {% if tan_session.tan_mode %}
+                <div class="flex items-center justify-between">
+                    <span class="text-sm text-gray-500">TAN-Verfahren</span>
+                    <span class="text-sm text-gray-900">{{ tan_session.tan_mode }}</span>
+                </div>
+                {% endif %}
+                {% if tan_session.tan_medium %}
+                <div class="flex items-center justify-between">
+                    <span class="text-sm text-gray-500">TAN-Medium</span>
+                    <span class="text-sm text-gray-900">{{ tan_session.tan_medium }}</span>
+                </div>
+                {% endif %}
+                <!-- Progress bar -->
+                <div class="mt-2">
+                    <div class="flex items-center justify-between text-xs text-gray-500 mb-1">
+                        <span>Session-Gültigkeit</span>
+                        <span>{{ tan_session.progress_percent }}% verbraucht</span>
+                    </div>
+                    <div class="w-full bg-gray-200 rounded-full h-2">
+                        <div class="h-2 rounded-full {% if tan_session.progress_percent < 70 %}bg-green-500{% elseif tan_session.progress_percent < 90 %}bg-yellow-500{% else %}bg-red-500{% endif %}"
+                             style="width: {{ tan_session.progress_percent }}%"></div>
+                    </div>
+                </div>
+                <p class="text-xs text-gray-400 mt-2">
+                    Gemäß PSD2 ist die starke Kundenauthentifizierung (SCA) für den Kontozugriff bis zu 90 Tage gültig.
+                    Nach Ablauf wird eine neue TAN-Eingabe erforderlich.
+                </p>
+            </div>
+            {% else %}
+            <div class="text-center py-4">
+                <span class="text-3xl">🔓</span>
+                <p class="mt-2 text-sm text-gray-500">Keine aktive TAN-Session vorhanden</p>
+                <p class="text-xs text-gray-400 mt-1">Eine Session wird bei der nächsten Synchronisierung mit TAN-Bestätigung erstellt.</p>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+
     <!-- TAN Input Modal -->
     <div x-show="showTanModal" x-cloak 
          class="fixed inset-0 z-50 overflow-y-auto" 
@@ -308,7 +379,10 @@
     <div class="bg-white shadow rounded-lg">
         <div class="px-4 py-5 sm:px-6 border-b border-gray-200 flex justify-between items-center">
             <h3 class="text-lg font-medium leading-6 text-gray-900">Konten</h3>
-            <span class="text-xs text-gray-400" title="MQTT aktivieren um Kontodaten an Home Assistant zu senden">📡 MQTT</span>
+            <div class="flex items-center gap-3">
+                <span class="text-xs text-gray-400" title="Manuelle TAN-Freigabe: Konto wird nicht automatisch synchronisiert, TAN-Eingabe muss über die UI bestätigt werden">🔐 TAN</span>
+                <span class="text-xs text-gray-400" title="MQTT aktivieren um Kontodaten an Home Assistant zu senden">📡 MQTT</span>
+            </div>
         </div>
         
         {% if regular_accounts|length > 0 %}
@@ -365,6 +439,17 @@
                             <p class="text-sm text-gray-400">Kein Saldo</p>
                             {% endif %}
                         </div>
+                        <!-- TAN Manual Approval Toggle -->
+                        <div x-data="tanApprovalToggle({{ account.id }}, {{ account.tan_manual_approval ?? 0 }})" class="mr-2" @click.stop>
+                            <button @click="toggle" type="button" 
+                                    class="relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-yellow-500 focus:ring-offset-2"
+                                    :class="enabled ? 'bg-yellow-500' : 'bg-gray-200'"
+                                    :title="enabled ? 'Manuelle TAN-Freigabe aktiv (kein Auto-Sync)' : 'Automatischer Abruf (Auto-Sync aktiv)'">
+                                <span class="sr-only">TAN Manuelle Freigabe</span>
+                                <span class="pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out"
+                                      :class="enabled ? 'translate-x-5' : 'translate-x-0'"></span>
+                            </button>
+                        </div>
                         <!-- MQTT Toggle -->
                         <div x-data="mqttToggle({{ account.id }}, {{ account.mqtt_export ?? 0 }})" class="mr-4" @click.stop>
                             <button @click="toggle" type="button" 
@@ -403,7 +488,10 @@
             <h3 class="text-lg font-medium leading-6 text-gray-900">
                 <span class="mr-2">📈</span> Depots
             </h3>
-            <span class="text-xs text-gray-400" title="MQTT aktivieren um Depotdaten an Home Assistant zu senden">📡 MQTT</span>
+            <div class="flex items-center gap-3">
+                <span class="text-xs text-gray-400" title="Manuelle TAN-Freigabe: Depot wird nicht automatisch synchronisiert">🔐 TAN</span>
+                <span class="text-xs text-gray-400" title="MQTT aktivieren um Depotdaten an Home Assistant zu senden">📡 MQTT</span>
+            </div>
         </div>
         
         <ul role="list" class="divide-y divide-gray-200">
@@ -443,6 +531,17 @@
                             {% else %}
                             <p class="text-sm text-gray-400">Kein Bestand</p>
                             {% endif %}
+                        </div>
+                        <!-- TAN Manual Approval Toggle -->
+                        <div x-data="tanApprovalToggle({{ depot.id }}, {{ depot.tan_manual_approval ?? 0 }})" class="mr-2" @click.stop>
+                            <button @click="toggle" type="button" 
+                                    class="relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-yellow-500 focus:ring-offset-2"
+                                    :class="enabled ? 'bg-yellow-500' : 'bg-gray-200'"
+                                    :title="enabled ? 'Manuelle TAN-Freigabe aktiv (kein Auto-Sync)' : 'Automatischer Abruf (Auto-Sync aktiv)'">
+                                <span class="sr-only">TAN Manuelle Freigabe</span>
+                                <span class="pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out"
+                                      :class="enabled ? 'translate-x-5' : 'translate-x-0'"></span>
+                            </button>
                         </div>
                         <!-- MQTT Toggle -->
                         <div x-data="mqttToggle({{ depot.id }}, {{ depot.mqtt_export ?? 0 }})" class="mr-4" @click.stop>
@@ -669,6 +768,34 @@ function mqttToggle(accountId, initialValue) {
             
             try {
                 const response = await fetch(`/api/accounts/${this.accountId}/mqtt-export`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ enabled: newValue })
+                });
+                const data = await response.json();
+                
+                if (data.success) {
+                    this.enabled = newValue;
+                } else {
+                    alert(data.message || 'Fehler beim Aktualisieren');
+                }
+            } catch (error) {
+                alert('Netzwerkfehler: ' + error.message);
+            }
+        }
+    };
+}
+
+function tanApprovalToggle(accountId, initialValue) {
+    return {
+        accountId: accountId,
+        enabled: initialValue == 1,
+        
+        async toggle() {
+            const newValue = !this.enabled;
+            
+            try {
+                const response = await fetch(`/api/accounts/${this.accountId}/tan-manual-approval`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ enabled: newValue })

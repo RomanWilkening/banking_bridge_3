@@ -58,6 +58,10 @@ return function (App $app) {
     $app->post('/api/mqtt/publish', [ApiController::class, 'publishMqtt'])->setName('api.mqtt.publish');
     $app->get('/api/mqtt/accounts', [ApiController::class, 'getMqttAccounts'])->setName('api.mqtt.accounts');
     $app->post('/api/accounts/{id}/mqtt-export', [ApiController::class, 'setAccountMqttExport'])->setName('api.accounts.mqttExport');
+    $app->post('/api/accounts/{id}/tan-manual-approval', [ApiController::class, 'setAccountTanManualApproval'])->setName('api.accounts.tanManualApproval');
+    
+    // TAN Session Info
+    $app->get('/api/banks/{id}/tan-session', [ApiController::class, 'getTanSessionInfo'])->setName('api.banks.tanSession');
     
     // Public Depot API (for external services)
     $app->get('/api/v1/depots', [ApiController::class, 'listDepots'])->setName('api.v1.depots');
