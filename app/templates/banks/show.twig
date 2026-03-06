@@ -63,9 +63,37 @@
                     <dt class="text-sm font-medium text-gray-500">FinTS-URL</dt>
                     <dd class="mt-1 text-sm text-gray-900 break-all">{{ bank.fints_url }}</dd>
                 </div>
-                <div>
+                <div x-data="editableCredential('username', {{ bank.id }}, '{{ bank.username|e('js') }}')">
                     <dt class="text-sm font-medium text-gray-500">Benutzer</dt>
-                    <dd class="mt-1 text-sm text-gray-900">{{ bank.username }}</dd>
+                    <dd class="mt-1 text-sm text-gray-900 flex items-center gap-2">
+                        <span x-show="!editing" x-text="displayValue"></span>
+                        <input x-show="editing" x-model="editValue" @keyup.enter="save" @keyup.escape="cancel"
+                               x-ref="credInput" type="text"
+                               class="text-sm text-gray-900 border-b border-primary-500 focus:outline-none bg-transparent">
+                        <button x-show="!editing" @click="edit" class="text-gray-400 hover:text-primary-500" title="Bearbeiten">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/>
+                            </svg>
+                        </button>
+                        <button x-show="editing" @click="save" class="text-green-500 hover:text-green-600" title="Speichern">✓</button>
+                        <button x-show="editing" @click="cancel" class="text-red-500 hover:text-red-600" title="Abbrechen">✕</button>
+                    </dd>
+                </div>
+                <div x-data="editableCredential('password', {{ bank.id }}, '••••••••')">
+                    <dt class="text-sm font-medium text-gray-500">PIN/Passwort</dt>
+                    <dd class="mt-1 text-sm text-gray-900 flex items-center gap-2">
+                        <span x-show="!editing" x-text="displayValue"></span>
+                        <input x-show="editing" x-model="editValue" @keyup.enter="save" @keyup.escape="cancel"
+                               x-ref="credInput" type="password" placeholder="Neues Passwort eingeben"
+                               class="text-sm text-gray-900 border-b border-primary-500 focus:outline-none bg-transparent">
+                        <button x-show="!editing" @click="edit" class="text-gray-400 hover:text-primary-500" title="Bearbeiten">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/>
+                            </svg>
+                        </button>
+                        <button x-show="editing" @click="save" class="text-green-500 hover:text-green-600" title="Speichern">✓</button>
+                        <button x-show="editing" @click="cancel" class="text-red-500 hover:text-red-600" title="Abbrechen">✕</button>
+                    </dd>
                 </div>
                 <div>
                     <dt class="text-sm font-medium text-gray-500">Erstellt am</dt>
@@ -74,6 +102,16 @@
                 <div>
                     <dt class="text-sm font-medium text-gray-500">Aktualisiert am</dt>
                     <dd class="mt-1 text-sm text-gray-900">{{ bank.updated_at|date('d.m.Y H:i') }}</dd>
+                </div>
+                <div class="sm:col-span-2">
+                    <a href="/banks/add?bank_code={{ bank.bank_code|url_encode }}&fints_url={{ bank.fints_url|url_encode }}&name={{ bank.name|url_encode }}"
+                       class="inline-flex items-center rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 hover:bg-gray-50">
+                        <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
+                        </svg>
+                        Mit anderen Zugangsdaten anlegen
+                    </a>
+                    <p class="mt-1 text-xs text-gray-500">Erstellt eine neue Bankverbindung mit gleicher BLZ und FinTS-URL, aber anderen Zugangsdaten.</p>
                 </div>
             </dl>
         </div>
@@ -684,6 +722,59 @@ function editableName(type, id, initialName) {
         
         cancel() {
             this.editName = this.displayName;
+            this.editing = false;
+        }
+    };
+}
+
+function editableCredential(field, bankId, initialValue) {
+    return {
+        field: field,
+        bankId: bankId,
+        displayValue: initialValue,
+        editValue: '',
+        editing: false,
+
+        edit() {
+            this.editValue = this.field === 'password' ? '' : this.displayValue;
+            this.editing = true;
+            this.$nextTick(() => this.$refs.credInput.focus());
+        },
+
+        async save() {
+            if (!this.editValue.trim()) {
+                this.cancel();
+                return;
+            }
+
+            try {
+                const body = {};
+                body[this.field] = this.editValue.trim();
+
+                const response = await fetch(`/api/banks/${this.bankId}`, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body)
+                });
+                const data = await response.json();
+
+                if (data.success) {
+                    if (this.field === 'password') {
+                        this.displayValue = '••••••••';
+                    } else {
+                        this.displayValue = this.editValue.trim();
+                    }
+                    this.editing = false;
+                } else {
+                    alert(data.message || 'Fehler beim Speichern');
+                }
+            } catch (error) {
+                alert('Netzwerkfehler: ' + error.message);
+            }
+        },
+
+        cancel() {
+            this.editValue = '';
             this.editing = false;
         }
     };

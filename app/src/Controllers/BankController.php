@@ -35,9 +35,23 @@ class BankController
 
     public function add(Request $request, Response $response): Response
     {
+        $queryParams = $request->getQueryParams();
+        $bank = [];
+        
+        // Support pre-filling from query parameters (for "duplicate with new credentials" flow)
+        if (!empty($queryParams['bank_code'])) {
+            $bank['bank_code'] = $queryParams['bank_code'];
+        }
+        if (!empty($queryParams['fints_url'])) {
+            $bank['fints_url'] = $queryParams['fints_url'];
+        }
+        if (!empty($queryParams['name'])) {
+            $bank['name'] = $queryParams['name'];
+        }
+        
         return $this->view->render($response, 'banks/add.twig', [
             'title' => 'Bank hinzufügen',
-            'bank' => []
+            'bank' => $bank
         ]);
     }
 

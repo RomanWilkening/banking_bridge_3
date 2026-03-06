@@ -1260,6 +1260,35 @@ class DatabaseService
         $stmt = $this->pdo->prepare("UPDATE banks SET name = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?");
         return $stmt->execute([trim($newName), $bankId]);
     }
+
+    /**
+     * Update bank credentials (username and/or password)
+     */
+    public function updateBankCredentials(int $bankId, ?string $username = null, ?string $password = null): bool
+    {
+        $fields = [];
+        $params = [];
+
+        if ($username !== null) {
+            $fields[] = 'username = ?';
+            $params[] = $username;
+        }
+        if ($password !== null) {
+            $fields[] = 'password = ?';
+            $params[] = $password;
+        }
+
+        if (empty($fields)) {
+            return false;
+        }
+
+        $fields[] = 'updated_at = CURRENT_TIMESTAMP';
+        $params[] = $bankId;
+
+        $sql = "UPDATE banks SET " . implode(', ', $fields) . " WHERE id = ?";
+        $stmt = $this->pdo->prepare($sql);
+        return $stmt->execute($params);
+    }
     
     /**
      * Rename an account (sets custom_name)
