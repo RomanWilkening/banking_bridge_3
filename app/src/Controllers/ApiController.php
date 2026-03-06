@@ -1162,6 +1162,18 @@ class ApiController
                 continue;
             }
             
+            // Filter out accounts that require manual TAN approval
+            $autoSyncAccounts = array_filter($accounts, function($account) {
+                return empty($account['tan_manual_approval']);
+            });
+            
+            if (empty($autoSyncAccounts)) {
+                $this->logger->info('Skipping bank - all accounts require manual TAN approval', ['bank_id' => $bankId]);
+                $results[$bankName] = ['status' => 'skipped', 'reason' => 'Alle Konten erfordern manuelle TAN-Freigabe'];
+                $totalStats['banks_skipped']++;
+                continue;
+            }
+            
             // Try to use existing session
             $existingSession = $this->db->getFinTSSession($bankId);
             $persistedInstance = $existingSession ? $existingSession['session_data'] : null;
@@ -1174,7 +1186,7 @@ class ApiController
                         'username' => $bank['username'],
                         'password' => $bank['password']
                     ],
-                    $accounts,
+                    array_values($autoSyncAccounts),
                     $persistedInstance
                 );
                 
@@ -1975,6 +1987,86 @@ class ApiController
             'success' => true,
             'message' => $enabled ? 'MQTT-Export aktiviert' : 'MQTT-Export deaktiviert',
             'mqtt_export' => $enabled
+        ]);
+    }
+    
+    /**
+     * Set TAN manual approval flag for an account
+     */
+    public function setAccountTanManualApproval(Request $request, Response $response, array $args): Response
+    {
+        $accountId = (int) $args['id'];
+        $account = $this->db->getAccountById($accountId);
+        
+        if (!$account) {
+            return $this->jsonResponse($response, [
+                'success' => false,
+                'message' => 'Konto nicht gefunden'
+            ], 404);
+        }
+        
+        $data = $request->getParsedBody() ?? [];
+        $enabled = !empty($data['enabled']);
+        
+        $this->db->setAccountTanManualApproval($accountId, $enabled);
+        
+        return $this->jsonResponse($response, [
+            'success' => true,
+            'message' => $enabled ? 'Manuelle TAN-Freigabe aktiviert' : 'Automatischer TAN-Abruf aktiviert',
+            'tan_manual_approval' => $enabled
+        ]);
+    }
+    
+    /**
+     * Get TAN session validity info for a bank
+     */
+    public function getTanSessionInfo(Request $request, Response $response, array $args): Response
+    {
+        $bankId = (int) $args['id'];
+        $bank = $this->db->getBankById($bankId);
+        
+        if (!$bank) {
+            return $this->jsonResponse($response, [
+                'success' => false,
+                'message' => 'Bank nicht gefunden'
+            ], 404);
+        }
+        
+        $session = $this->db->getFinTSSession($bankId);
+        
+        if (!$session) {
+            return $this->jsonResponse($response, [
+                'success' => true,
+                'has_session' => false,
+                'message' => 'Keine aktive TAN-Session vorhanden'
+            ]);
+        }
+        
+        $createdAt = new \DateTime($session['created_at']);
+        $expiresAt = new \DateTime($session['expires_at']);
+        $now = new \DateTime();
+        
+        $remainingInterval = $now->diff($expiresAt);
+        $remainingDays = max(0, (int) $remainingInterval->format('%r%a'));
+        
+        $totalInterval = $createdAt->diff($expiresAt);
+        $totalDays = (int) $totalInterval->format('%a');
+        $elapsedInterval = $createdAt->diff($now);
+        $elapsedDays = (int) $elapsedInterval->format('%a');
+        
+        $progressPercent = $totalDays > 0 ? min(100, round(($elapsedDays / $totalDays) * 100)) : 100;
+        
+        return $this->jsonResponse($response, [
+            'success' => true,
+            'has_session' => true,
+            'created_at' => $createdAt->format('d.m.Y H:i'),
+            'expires_at' => $expiresAt->format('d.m.Y H:i'),
+            'remaining_days' => $remainingDays,
+            'total_days' => $totalDays,
+            'progress_percent' => $progressPercent,
+            'tan_mode' => $session['tan_mode'] ?? null,
+            'tan_medium' => $session['tan_medium'] ?? null,
+            'is_valid' => $remainingDays > 0
         ]);
     }
     

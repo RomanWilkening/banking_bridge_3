@@ -116,6 +116,22 @@ try {
             continue;
         }
         
+        // Filter out accounts that require manual TAN approval
+        $autoSyncAccounts = array_filter($accounts, function($account) {
+            return empty($account['tan_manual_approval']);
+        });
+        
+        if (empty($autoSyncAccounts)) {
+            $logger->info("Skipping {$bankName} - all accounts require manual TAN approval");
+            $totalStats['banks_skipped']++;
+            continue;
+        }
+        
+        $skippedCount = count($accounts) - count($autoSyncAccounts);
+        if ($skippedCount > 0) {
+            $logger->info("Skipping {$skippedCount} accounts with manual TAN approval for {$bankName}");
+        }
+        
         // Try to use existing session
         $session = $db->getFinTSSession($bankId);
         $persistedInstance = $session ? $session['session_data'] : null;
@@ -128,7 +144,7 @@ try {
                     'username' => $bank['username'],
                     'password' => $bank['password']
                 ],
-                $accounts,
+                array_values($autoSyncAccounts),
                 $persistedInstance
             );
             

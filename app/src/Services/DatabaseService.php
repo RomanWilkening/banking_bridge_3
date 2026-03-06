@@ -225,6 +225,11 @@ class DatabaseService
             $this->pdo->exec("ALTER TABLE accounts ADD COLUMN custom_name TEXT");
         }
         
+        // Add tan_manual_approval for per-account TAN control
+        if (!in_array('tan_manual_approval', $columnNames)) {
+            $this->pdo->exec("ALTER TABLE accounts ADD COLUMN tan_manual_approval INTEGER DEFAULT 0");
+        }
+        
         // Create PayPal accounts table if it doesn't exist
         $this->pdo->exec("
             CREATE TABLE IF NOT EXISTS paypal_accounts (
@@ -1212,6 +1217,18 @@ class DatabaseService
     {
         $stmt = $this->pdo->prepare("
             UPDATE accounts SET mqtt_export = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+        ");
+        return $stmt->execute([$enabled ? 1 : 0, $accountId]);
+    }
+    
+    /**
+     * Set TAN manual approval flag for an account
+     */
+    public function setAccountTanManualApproval(int $accountId, bool $enabled): bool
+    {
+        $stmt = $this->pdo->prepare("
+            UPDATE accounts SET tan_manual_approval = ?, updated_at = CURRENT_TIMESTAMP
             WHERE id = ?
         ");
         return $stmt->execute([$enabled ? 1 : 0, $accountId]);

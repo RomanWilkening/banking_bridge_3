@@ -93,12 +93,37 @@ class BankController
         
         // Get all depots for linking dropdown
         $depots = $this->db->getAllDepots();
+        
+        // Get TAN session validity info
+        $session = $this->db->getFinTSSession($bankId);
+        $tanSession = null;
+        if ($session) {
+            $createdAt = new \DateTime($session['created_at']);
+            $expiresAt = new \DateTime($session['expires_at']);
+            $now = new \DateTime();
+            $remainingDays = max(0, (int) $now->diff($expiresAt)->format('%r%a'));
+            $totalDays = (int) $createdAt->diff($expiresAt)->format('%a');
+            $elapsedDays = (int) $createdAt->diff($now)->format('%a');
+            $progressPercent = $totalDays > 0 ? min(100, round(($elapsedDays / $totalDays) * 100)) : 100;
+            
+            $tanSession = [
+                'created_at' => $createdAt->format('d.m.Y H:i'),
+                'expires_at' => $expiresAt->format('d.m.Y H:i'),
+                'remaining_days' => $remainingDays,
+                'total_days' => $totalDays,
+                'progress_percent' => $progressPercent,
+                'tan_mode' => $session['tan_mode'] ?? null,
+                'tan_medium' => $session['tan_medium'] ?? null,
+                'is_valid' => $remainingDays > 0
+            ];
+        }
 
         return $this->view->render($response, 'banks/show.twig', [
             'title' => $bank['name'],
             'bank' => $bank,
             'accounts' => $accounts,
-            'depots' => $depots
+            'depots' => $depots,
+            'tan_session' => $tanSession
         ]);
     }
 

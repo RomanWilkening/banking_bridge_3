@@ -32,8 +32,10 @@ Diese Dokumentation beschreibt alle verfügbaren API-Endpunkte der Banking Bridg
   - [Daten veröffentlichen](#mqtt-daten-veröffentlichen)
   - [MQTT-Konten anzeigen](#mqtt-konten-anzeigen)
   - [MQTT-Export aktivieren](#mqtt-export-aktivieren)
+  - [TAN manuelle Freigabe](#tan-manuelle-freigabe)
 - [Auto-Sync API](#auto-sync-api)
 - [TAN-Verfahren](#tan-verfahren)
+  - [TAN-Session Gültigkeit](#tan-session-gültigkeit)
 
 ---
 
@@ -840,6 +842,30 @@ Aktiviert oder deaktiviert den MQTT-Export für ein Konto.
 
 ---
 
+### TAN manuelle Freigabe
+
+Aktiviert oder deaktiviert die manuelle TAN-Freigabe für ein Konto. Wenn aktiviert, wird das Konto bei der automatischen Synchronisierung übersprungen und erfordert eine manuelle Bestätigung über die UI.
+
+**Endpunkt:** `POST /api/accounts/{id}/tan-manual-approval`
+
+**Request Body:**
+```json
+{
+  "enabled": true
+}
+```
+
+**Antwort:**
+```json
+{
+  "success": true,
+  "message": "Manuelle TAN-Freigabe aktiviert",
+  "tan_manual_approval": true
+}
+```
+
+---
+
 ## Auto-Sync API
 
 ### Auto-Sync ausführen
@@ -848,7 +874,7 @@ Führt eine automatische Synchronisierung aller Banken durch.
 
 **Endpunkt:** `POST /api/auto-sync/run`
 
-**Hinweis:** Banken, die eine TAN erfordern, werden übersprungen.
+**Hinweis:** Banken, die eine TAN erfordern, sowie Konten mit aktivierter manueller TAN-Freigabe werden übersprungen.
 
 **Antwort:**
 ```json
@@ -946,6 +972,39 @@ Bei klassischen TAN-Verfahren (iTAN, mTAN, chipTAN) muss die TAN übermittelt we
 ```json
 {
   "tan": "123456"
+}
+```
+
+---
+
+### TAN-Session Gültigkeit
+
+Ruft Informationen über die aktive TAN-Session einer Bank ab. Die Session-Gültigkeit basiert auf PSD2 SCA (Strong Customer Authentication), die für den Kontozugriff bis zu 90 Tage gültig ist.
+
+**Endpunkt:** `GET /api/banks/{id}/tan-session`
+
+**Antwort (mit aktiver Session):**
+```json
+{
+  "success": true,
+  "has_session": true,
+  "created_at": "15.01.2024 10:30",
+  "expires_at": "15.04.2024 10:30",
+  "remaining_days": 87,
+  "total_days": 90,
+  "progress_percent": 3,
+  "tan_mode": "pushTAN",
+  "tan_medium": "iPhone von Max",
+  "is_valid": true
+}
+```
+
+**Antwort (ohne aktive Session):**
+```json
+{
+  "success": true,
+  "has_session": false,
+  "message": "Keine aktive TAN-Session vorhanden"
 }
 ```
 
