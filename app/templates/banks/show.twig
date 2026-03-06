@@ -380,7 +380,7 @@
         <div class="px-4 py-5 sm:px-6 border-b border-gray-200 flex justify-between items-center">
             <h3 class="text-lg font-medium leading-6 text-gray-900">Konten</h3>
             <div class="flex items-center gap-3">
-                <span class="text-xs text-gray-400" title="Manuelle TAN-Freigabe: Konto wird nicht automatisch synchronisiert, TAN-Eingabe muss über die UI bestätigt werden">🔐 TAN</span>
+                <span class="text-xs text-gray-400" title="Manuelle TAN-Freigabe: Bei abgelaufener PIN wird kein automatischer TAN-Abruf durchgeführt – TAN muss manuell über die UI bestätigt werden. Das Konto wird weiterhin synchronisiert.">🔐 TAN</span>
                 <span class="text-xs text-gray-400" title="MQTT aktivieren um Kontodaten an Home Assistant zu senden">📡 MQTT</span>
             </div>
         </div>
@@ -444,7 +444,7 @@
                             <button @click="toggle" type="button" 
                                     class="relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-yellow-500 focus:ring-offset-2"
                                     :class="enabled ? 'bg-yellow-500' : 'bg-gray-200'"
-                                    :title="enabled ? 'Manuelle TAN-Freigabe aktiv (kein Auto-Sync)' : 'Automatischer Abruf (Auto-Sync aktiv)'">
+                                    :title="enabled ? 'Manuelle TAN-Freigabe aktiv (kein automatischer TAN-Abruf bei abgelaufener PIN)' : 'Automatischer TAN-Abruf erlaubt'">
                                 <span class="sr-only">TAN Manuelle Freigabe</span>
                                 <span class="pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out"
                                       :class="enabled ? 'translate-x-5' : 'translate-x-0'"></span>
@@ -489,7 +489,7 @@
                 <span class="mr-2">📈</span> Depots
             </h3>
             <div class="flex items-center gap-3">
-                <span class="text-xs text-gray-400" title="Manuelle TAN-Freigabe: Depot wird nicht automatisch synchronisiert">🔐 TAN</span>
+                <span class="text-xs text-gray-400" title="Manuelle TAN-Freigabe: Bei abgelaufener PIN wird kein automatischer TAN-Abruf durchgeführt – TAN muss manuell über die UI bestätigt werden. Das Depot wird weiterhin synchronisiert.">🔐 TAN</span>
                 <span class="text-xs text-gray-400" title="MQTT aktivieren um Depotdaten an Home Assistant zu senden">📡 MQTT</span>
             </div>
         </div>
@@ -537,7 +537,7 @@
                             <button @click="toggle" type="button" 
                                     class="relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-yellow-500 focus:ring-offset-2"
                                     :class="enabled ? 'bg-yellow-500' : 'bg-gray-200'"
-                                    :title="enabled ? 'Manuelle TAN-Freigabe aktiv (kein Auto-Sync)' : 'Automatischer Abruf (Auto-Sync aktiv)'">
+                                    :title="enabled ? 'Manuelle TAN-Freigabe aktiv (kein automatischer TAN-Abruf bei abgelaufener PIN)' : 'Automatischer TAN-Abruf erlaubt'">
                                 <span class="sr-only">TAN Manuelle Freigabe</span>
                                 <span class="pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out"
                                       :class="enabled ? 'translate-x-5' : 'translate-x-0'"></span>

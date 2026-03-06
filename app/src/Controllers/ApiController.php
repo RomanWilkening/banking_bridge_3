@@ -1162,17 +1162,10 @@ class ApiController
                 continue;
             }
             
-            // Filter out accounts that require manual TAN approval
-            $autoSyncAccounts = array_filter($accounts, function($account) {
-                return empty($account['tan_manual_approval']);
-            });
-            
-            if (empty($autoSyncAccounts)) {
-                $this->logger->info('Skipping bank - all accounts require manual TAN approval', ['bank_id' => $bankId]);
-                $results[$bankName] = ['status' => 'skipped', 'reason' => 'Alle Konten erfordern manuelle TAN-Freigabe'];
-                $totalStats['banks_skipped']++;
-                continue;
-            }
+            // Check if any account requires manual TAN approval
+            $hasManualTanApproval = !empty(array_filter($accounts, function($account) {
+                return !empty($account['tan_manual_approval']);
+            }));
             
             // Try to use existing session
             $existingSession = $this->db->getFinTSSession($bankId);
@@ -1186,20 +1179,25 @@ class ApiController
                         'username' => $bank['username'],
                         'password' => $bank['password']
                     ],
-                    array_values($autoSyncAccounts),
+                    $accounts,
                     $persistedInstance
                 );
                 
                 // If TAN is required, skip this bank
                 if (isset($result['needs_tan']) && $result['needs_tan']) {
-                    $this->logger->info('Auto-sync: TAN required, skipping', ['bank_id' => $bankId]);
-                    $results[$bankName] = ['status' => 'skipped', 'reason' => 'TAN erforderlich'];
+                    if ($hasManualTanApproval) {
+                        $this->logger->info('Auto-sync: TAN required, manual approval configured', ['bank_id' => $bankId]);
+                        $results[$bankName] = ['status' => 'skipped', 'reason' => 'TAN erforderlich – manuelle Freigabe konfiguriert'];
+                    } else {
+                        $this->logger->info('Auto-sync: TAN required, skipping', ['bank_id' => $bankId]);
+                        $results[$bankName] = ['status' => 'skipped', 'reason' => 'TAN erforderlich'];
+                    }
                     $totalStats['banks_skipped']++;
                     
                     $this->db->logActivity(
                         'auto_sync_skipped',
                         'warning',
-                        'Automatische Synchronisierung übersprungen - TAN erforderlich',
+                        'Auto-Sync übersprungen – TAN erforderlich',
                         $bankId
                     );
                     continue;
@@ -2012,7 +2010,7 @@ class ApiController
         
         return $this->jsonResponse($response, [
             'success' => true,
-            'message' => $enabled ? 'Manuelle TAN-Freigabe aktiviert' : 'Automatischer TAN-Abruf aktiviert',
+            'message' => $enabled ? 'Manuelle TAN-Freigabe aktiviert – bei abgelaufener PIN wird kein automatischer TAN-Abruf durchgeführt' : 'Automatischer TAN-Abruf aktiviert',
             'tan_manual_approval' => $enabled
         ]);
     }

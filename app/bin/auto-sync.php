@@ -116,21 +116,10 @@ try {
             continue;
         }
         
-        // Filter out accounts that require manual TAN approval
-        $autoSyncAccounts = array_filter($accounts, function($account) {
-            return empty($account['tan_manual_approval']);
-        });
-        
-        if (empty($autoSyncAccounts)) {
-            $logger->info("Skipping {$bankName} - all accounts require manual TAN approval");
-            $totalStats['banks_skipped']++;
-            continue;
-        }
-        
-        $skippedCount = count($accounts) - count($autoSyncAccounts);
-        if ($skippedCount > 0) {
-            $logger->info("Skipping {$skippedCount} accounts with manual TAN approval for {$bankName}");
-        }
+        // Check if any account requires manual TAN approval
+        $hasManualTanApproval = !empty(array_filter($accounts, function($account) {
+            return !empty($account['tan_manual_approval']);
+        }));
         
         // Try to use existing session
         $session = $db->getFinTSSession($bankId);
@@ -144,21 +133,30 @@ try {
                     'username' => $bank['username'],
                     'password' => $bank['password']
                 ],
-                array_values($autoSyncAccounts),
+                $accounts,
                 $persistedInstance
             );
             
-            // Skip if TAN required
+            // Skip if TAN required and manual approval is configured
             if (isset($result['needs_tan']) && $result['needs_tan']) {
-                $logger->warning("Skipping {$bankName} - TAN required");
+                if ($hasManualTanApproval) {
+                    $logger->warning("Skipping {$bankName} - TAN required, manual approval configured");
+                    $db->logActivity(
+                        'auto_sync_skipped',
+                        'warning',
+                        'Auto-Sync übersprungen - TAN erforderlich, manuelle Freigabe konfiguriert',
+                        $bankId
+                    );
+                } else {
+                    $logger->warning("Skipping {$bankName} - TAN required");
+                    $db->logActivity(
+                        'auto_sync_skipped',
+                        'warning',
+                        'Auto-Sync übersprungen - TAN erforderlich',
+                        $bankId
+                    );
+                }
                 $totalStats['banks_skipped']++;
-                
-                $db->logActivity(
-                    'auto_sync_skipped',
-                    'warning',
-                    'Automatische Synchronisierung übersprungen - TAN erforderlich',
-                    $bankId
-                );
                 continue;
             }
             
