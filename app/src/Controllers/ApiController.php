@@ -2047,7 +2047,7 @@ class ApiController
         $now = new \DateTime();
         
         $remainingInterval = $now->diff($expiresAt);
-        $remainingDays = (int) $remainingInterval->format('%r%a');
+        $remainingDays = max(0, (int) $remainingInterval->format('%r%a'));
         
         $totalInterval = $createdAt->diff($expiresAt);
         $totalDays = (int) $totalInterval->format('%a');
@@ -2061,7 +2061,7 @@ class ApiController
             'has_session' => true,
             'created_at' => $createdAt->format('d.m.Y H:i'),
             'expires_at' => $expiresAt->format('d.m.Y H:i'),
-            'remaining_days' => max(0, $remainingDays),
+            'remaining_days' => $remainingDays,
             'total_days' => $totalDays,
             'progress_percent' => $progressPercent,
             'tan_mode' => $session['tan_mode'] ?? null,
