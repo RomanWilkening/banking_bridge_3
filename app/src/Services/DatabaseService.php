@@ -1398,4 +1398,35 @@ class DatabaseService
         $stmt->execute([$accountId]);
         return $stmt->fetchAll();
     }
+    
+    /**
+     * Get all accounts with bank information (for public API)
+     */
+    public function getAllAccountsWithBank(): array
+    {
+        $stmt = $this->pdo->query("
+            SELECT a.*, b.name as bank_name, b.bank_code,
+                   COALESCE(a.custom_name, a.account_name) as display_name
+            FROM accounts a
+            JOIN banks b ON a.bank_id = b.id
+            ORDER BY b.name, COALESCE(a.custom_name, a.account_name)
+        ");
+        return $stmt->fetchAll();
+    }
+    
+    /**
+     * Get transactions for an account filtered by date range
+     */
+    public function getTransactionsByDateRange(int $accountId, string $from, string $to): array
+    {
+        $stmt = $this->pdo->prepare("
+            SELECT * FROM transactions 
+            WHERE account_id = ? 
+              AND booking_date >= ? 
+              AND booking_date <= ?
+            ORDER BY booking_date DESC, id DESC
+        ");
+        $stmt->execute([$accountId, $from, $to]);
+        return $stmt->fetchAll();
+    }
 }

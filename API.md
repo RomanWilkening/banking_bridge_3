@@ -6,6 +6,10 @@ Diese Dokumentation beschreibt alle verfügbaren API-Endpunkte der Banking Bridg
 
 - [Übersicht](#übersicht)
 - [Authentifizierung](#authentifizierung)
+- [Konten API (v1)](#konten-api-v1)
+  - [Alle Konten auflisten](#alle-konten-auflisten)
+  - [Einzelnes Konto abrufen](#einzelnes-konto-abrufen)
+  - [Konto-Transaktionen abrufen](#konto-transaktionen-abrufen)
 - [Depot API (v1)](#depot-api-v1)
   - [Alle Depots auflisten](#alle-depots-auflisten)
   - [Einzelnes Depot abrufen](#einzelnes-depot-abrufen)
@@ -67,6 +71,226 @@ Diese Dokumentation beschreibt alle verfügbaren API-Endpunkte der Banking Bridg
 ## Authentifizierung
 
 Die API verwendet derzeit keine Authentifizierung. Für den Produktiveinsatz sollte die Anwendung in einem geschützten Netzwerk betrieben oder ein Reverse Proxy mit Authentifizierung vorgeschaltet werden.
+
+---
+
+## Konten API (v1)
+
+Die Konten API ermöglicht externen Diensten den Zugriff auf Bankkonten mit aktuellen Salden sowie deren Transaktionen. Alle Konten sind über ihre statische ID ansprechbar.
+
+### Alle Konten auflisten
+
+Listet alle verfügbaren Bankkonten mit ihrem aktuellen Saldo auf.
+
+**Endpunkt:** `GET /api/v1/accounts`
+
+**Antwort:**
+```json
+{
+  "success": true,
+  "count": 3,
+  "accounts": [
+    {
+      "id": 1,
+      "name": "Girokonto",
+      "account_number": "1234567890",
+      "iban": "DE89370400440532013000",
+      "bic": "COBADEFFXXX",
+      "account_type": "checking",
+      "bank": "Commerzbank",
+      "bank_code": "37040044",
+      "balance": 2500.75,
+      "currency": "EUR",
+      "last_update": "2024-01-15 10:30:00"
+    },
+    {
+      "id": 2,
+      "name": "Sparkonto",
+      "account_number": "9876543210",
+      "iban": "DE27100777770209299700",
+      "bic": "DEUTDEDBPAL",
+      "account_type": "savings",
+      "bank": "Deutsche Bank",
+      "bank_code": "10077777",
+      "balance": 15000.00,
+      "currency": "EUR",
+      "last_update": "2024-01-15 10:30:00"
+    }
+  ]
+}
+```
+
+**Felder:**
+| Feld | Typ | Beschreibung |
+|------|-----|--------------|
+| `id` | integer | Statische Konto-ID (für den Zugriff auf Einzelkonto und Transaktionen) |
+| `name` | string | Anzeigename des Kontos (benutzerdefiniert oder von der Bank) |
+| `account_number` | string | Kontonummer |
+| `iban` | string | IBAN des Kontos |
+| `bic` | string | BIC der Bank |
+| `account_type` | string | Kontotyp (z.B. `checking`, `savings`, `depot`) |
+| `bank` | string | Name der Bank |
+| `bank_code` | string | Bankleitzahl |
+| `balance` | float | Aktueller Kontostand |
+| `currency` | string | Währung (Standard: EUR) |
+| `last_update` | string | Zeitpunkt der letzten Aktualisierung |
+
+**Beispiel:**
+```bash
+curl http://localhost:8080/api/v1/accounts
+```
+
+---
+
+### Einzelnes Konto abrufen
+
+Ruft Details zu einem spezifischen Konto ab, inklusive aktuellem Saldo.
+
+**Endpunkt:** `GET /api/v1/accounts/{id}`
+
+**Parameter:**
+| Parameter | Typ | Beschreibung |
+|-----------|-----|--------------|
+| `id` | integer | Statische Konto-ID |
+
+**Antwort:**
+```json
+{
+  "success": true,
+  "account": {
+    "id": 1,
+    "name": "Girokonto",
+    "account_number": "1234567890",
+    "iban": "DE89370400440532013000",
+    "bic": "COBADEFFXXX",
+    "account_type": "checking",
+    "bank": "Commerzbank",
+    "bank_code": "37040044",
+    "balance": 2500.75,
+    "currency": "EUR",
+    "last_update": "2024-01-15 10:30:00"
+  }
+}
+```
+
+**Fehler (404):**
+```json
+{
+  "success": false,
+  "message": "Konto nicht gefunden"
+}
+```
+
+**Beispiel:**
+```bash
+curl http://localhost:8080/api/v1/accounts/1
+```
+
+---
+
+### Konto-Transaktionen abrufen
+
+Ruft Transaktionen eines Kontos für einen bestimmten Zeitraum ab. Die Ergebnisse enthalten Datum, Empfänger, Verwendungszweck und Betrag.
+
+**Endpunkt:** `GET /api/v1/accounts/{id}/transactions?from=YYYY-MM-DD&to=YYYY-MM-DD`
+
+**Parameter:**
+| Parameter | Typ | Pflicht | Beschreibung |
+|-----------|-----|---------|--------------|
+| `id` | integer | Ja | Statische Konto-ID |
+| `from` | string | Ja | Startdatum (Format: `YYYY-MM-DD`) |
+| `to` | string | Ja | Enddatum (Format: `YYYY-MM-DD`) |
+
+**Antwort:**
+```json
+{
+  "success": true,
+  "account": {
+    "id": 1,
+    "name": "Girokonto",
+    "iban": "DE89370400440532013000"
+  },
+  "from": "2024-01-01",
+  "to": "2024-01-31",
+  "count": 3,
+  "transactions": [
+    {
+      "booking_date": "2024-01-28",
+      "name": "Max Mustermann",
+      "description": "Miete Januar 2024",
+      "amount": -850.00,
+      "currency": "EUR",
+      "iban": "DE27100777770209299700",
+      "booking_text": "SEPA-Überweisung"
+    },
+    {
+      "booking_date": "2024-01-15",
+      "name": "Arbeitgeber GmbH",
+      "description": "Gehalt Januar",
+      "amount": 3200.00,
+      "currency": "EUR",
+      "iban": "DE89370400440532013001",
+      "booking_text": "Gehalt/Rente"
+    },
+    {
+      "booking_date": "2024-01-05",
+      "name": "Stadtwerke Berlin",
+      "description": "Strom Abschlag Jan",
+      "amount": -75.50,
+      "currency": "EUR",
+      "iban": "DE44500105175407324931",
+      "booking_text": "SEPA-Lastschrift"
+    }
+  ]
+}
+```
+
+**Transaktions-Felder:**
+| Feld | Typ | Beschreibung |
+|------|-----|--------------|
+| `booking_date` | string | Buchungsdatum (Format: `YYYY-MM-DD`) |
+| `name` | string | Empfänger/Auftraggeber |
+| `description` | string | Verwendungszweck |
+| `amount` | float | Betrag (negativ = Ausgabe, positiv = Einnahme) |
+| `currency` | string | Währung (Standard: EUR) |
+| `iban` | string | IBAN des Empfängers/Auftraggebers |
+| `booking_text` | string | Buchungsart (z.B. SEPA-Überweisung, Lastschrift) |
+
+**Fehler (400) - Fehlende Parameter:**
+```json
+{
+  "success": false,
+  "message": "Parameter \"from\" und \"to\" (Format: YYYY-MM-DD) sind erforderlich"
+}
+```
+
+**Fehler (400) - Ungültiges Datum:**
+```json
+{
+  "success": false,
+  "message": "Ungültiges Datumsformat für \"from\". Erwartet: YYYY-MM-DD"
+}
+```
+
+**Fehler (404) - Konto nicht gefunden:**
+```json
+{
+  "success": false,
+  "message": "Konto nicht gefunden"
+}
+```
+
+**Beispiele:**
+```bash
+# Transaktionen für Januar 2024
+curl "http://localhost:8080/api/v1/accounts/1/transactions?from=2024-01-01&to=2024-01-31"
+
+# Transaktionen der letzten 7 Tage
+curl "http://localhost:8080/api/v1/accounts/1/transactions?from=2024-01-08&to=2024-01-15"
+
+# Transaktionen eines ganzen Jahres
+curl "http://localhost:8080/api/v1/accounts/1/transactions?from=2023-01-01&to=2023-12-31"
+```
 
 ---
 
