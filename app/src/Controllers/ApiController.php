@@ -2010,7 +2010,7 @@ class ApiController
         
         return $this->jsonResponse($response, [
             'success' => true,
-            'message' => $enabled ? 'Manuelle TAN-Freigabe aktiviert – bei abgelaufener PIN wird kein automatischer TAN-Abruf durchgeführt' : 'Automatischer TAN-Abruf aktiviert',
+            'message' => $enabled ? 'Manuelle TAN-Freigabe aktiviert – bei abgelaufener TAN wird kein automatischer TAN-Abruf durchgeführt' : 'Automatischer TAN-Abruf aktiviert',
             'tan_manual_approval' => $enabled
         ]);
     }
