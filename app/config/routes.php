@@ -69,6 +69,11 @@ return function (App $app) {
     $app->get('/api/v1/depots/{id}/holdings', [ApiController::class, 'listDepotHoldings'])->setName('api.v1.depot.holdings');
     $app->get('/api/v1/holdings', [ApiController::class, 'listAllHoldings'])->setName('api.v1.holdings');
     
+    // Public Accounts API (for external services)
+    $app->get('/api/v1/accounts', [ApiController::class, 'listAccounts'])->setName('api.v1.accounts');
+    $app->get('/api/v1/accounts/{id}', [ApiController::class, 'getAccountDetail'])->setName('api.v1.account');
+    $app->get('/api/v1/accounts/{id}/transactions', [ApiController::class, 'listAccountTransactions'])->setName('api.v1.account.transactions');
+    
     // Rename & Link API
     $app->patch('/api/banks/{id}', [ApiController::class, 'updateBank'])->setName('api.banks.update');
     $app->patch('/api/accounts/{id}', [ApiController::class, 'updateAccount'])->setName('api.accounts.update');

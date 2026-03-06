@@ -2168,4 +2168,142 @@ class ApiController
             'message' => "Transaction-IDs für {$count} Transaktionen wurden neu generiert."
         ]);
     }
+    
+    // ==================== Public Accounts API (v1) ====================
+    
+    /**
+     * List all accounts with current balances
+     * GET /api/v1/accounts
+     */
+    public function listAccounts(Request $request, Response $response): Response
+    {
+        $accounts = $this->db->getAllAccountsWithBank();
+        
+        return $this->jsonResponse($response, [
+            'success' => true,
+            'count' => count($accounts),
+            'accounts' => array_map(function($a) {
+                return [
+                    'id' => (int) $a['id'],
+                    'name' => $a['display_name'] ?? $a['account_name'],
+                    'account_number' => $a['account_number'],
+                    'iban' => $a['iban'],
+                    'bic' => $a['bic'],
+                    'account_type' => $a['account_type'],
+                    'bank' => $a['bank_name'],
+                    'bank_code' => $a['bank_code'],
+                    'balance' => $a['balance'] !== null ? round((float) $a['balance'], 2) : null,
+                    'currency' => $a['currency'] ?? 'EUR',
+                    'last_update' => $a['balance_date'],
+                ];
+            }, $accounts)
+        ]);
+    }
+    
+    /**
+     * Get a single account with current balance
+     * GET /api/v1/accounts/{id}
+     */
+    public function getAccountDetail(Request $request, Response $response, array $args): Response
+    {
+        $accountId = (int) $args['id'];
+        $account = $this->db->getAccountWithBank($accountId);
+        
+        if (!$account) {
+            return $this->jsonResponse($response, [
+                'success' => false,
+                'message' => 'Konto nicht gefunden'
+            ], 404);
+        }
+        
+        return $this->jsonResponse($response, [
+            'success' => true,
+            'account' => [
+                'id' => (int) $account['id'],
+                'name' => $account['custom_name'] ?? $account['account_name'],
+                'account_number' => $account['account_number'],
+                'iban' => $account['iban'],
+                'bic' => $account['bic'],
+                'account_type' => $account['account_type'],
+                'bank' => $account['bank_name'],
+                'bank_code' => $account['bank_code'],
+                'balance' => $account['balance'] !== null ? round((float) $account['balance'], 2) : null,
+                'currency' => $account['currency'] ?? 'EUR',
+                'last_update' => $account['balance_date'],
+            ]
+        ]);
+    }
+    
+    /**
+     * List transactions for an account with date range filter
+     * GET /api/v1/accounts/{id}/transactions?from=YYYY-MM-DD&to=YYYY-MM-DD
+     */
+    public function listAccountTransactions(Request $request, Response $response, array $args): Response
+    {
+        $accountId = (int) $args['id'];
+        $account = $this->db->getAccountWithBank($accountId);
+        
+        if (!$account) {
+            return $this->jsonResponse($response, [
+                'success' => false,
+                'message' => 'Konto nicht gefunden'
+            ], 404);
+        }
+        
+        $params = $request->getQueryParams();
+        
+        // Validate and parse date parameters
+        $from = $params['from'] ?? null;
+        $to = $params['to'] ?? null;
+        
+        if (!$from || !$to) {
+            return $this->jsonResponse($response, [
+                'success' => false,
+                'message' => 'Parameter "from" und "to" (Format: YYYY-MM-DD) sind erforderlich'
+            ], 400);
+        }
+        
+        // Validate date format
+        $fromDate = \DateTime::createFromFormat('Y-m-d', $from);
+        $toDate = \DateTime::createFromFormat('Y-m-d', $to);
+        
+        if (!$fromDate || $fromDate->format('Y-m-d') !== $from) {
+            return $this->jsonResponse($response, [
+                'success' => false,
+                'message' => 'Ungültiges Datumsformat für "from". Erwartet: YYYY-MM-DD'
+            ], 400);
+        }
+        
+        if (!$toDate || $toDate->format('Y-m-d') !== $to) {
+            return $this->jsonResponse($response, [
+                'success' => false,
+                'message' => 'Ungültiges Datumsformat für "to". Erwartet: YYYY-MM-DD'
+            ], 400);
+        }
+        
+        $transactions = $this->db->getTransactionsByDateRange($accountId, $from, $to);
+        
+        return $this->jsonResponse($response, [
+            'success' => true,
+            'account' => [
+                'id' => (int) $account['id'],
+                'name' => $account['custom_name'] ?? $account['account_name'],
+                'iban' => $account['iban'],
+            ],
+            'from' => $from,
+            'to' => $to,
+            'count' => count($transactions),
+            'transactions' => array_map(function($t) {
+                return [
+                    'booking_date' => $t['booking_date'],
+                    'name' => $t['name'],
+                    'description' => $t['description'],
+                    'amount' => round((float) $t['amount'], 2),
+                    'currency' => $t['currency'] ?? 'EUR',
+                    'iban' => $t['iban'],
+                    'booking_text' => $t['booking_text'],
+                ];
+            }, $transactions)
+        ]);
+    }
 }
