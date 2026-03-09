@@ -67,8 +67,26 @@ class AccountController
         $limit = 30;
         $offset = ($page - 1) * $limit;
 
-        $transactions = $this->db->getTransactionsByAccountId($accountId, $limit, $offset);
-        $totalTransactions = $this->db->getTransactionCount($accountId);
+        // Build filter array from query params
+        $filters = [];
+        if (!empty($params['search'])) {
+            $filters['search'] = trim($params['search']);
+        }
+        if (!empty($params['date_from'])) {
+            $filters['date_from'] = $params['date_from'];
+        }
+        if (!empty($params['date_to'])) {
+            $filters['date_to'] = $params['date_to'];
+        }
+        if (isset($params['amount_min']) && $params['amount_min'] !== '') {
+            $filters['amount_min'] = $params['amount_min'];
+        }
+        if (isset($params['amount_max']) && $params['amount_max'] !== '') {
+            $filters['amount_max'] = $params['amount_max'];
+        }
+
+        $transactions = $this->db->getTransactionsByAccountId($accountId, $limit, $offset, $filters);
+        $totalTransactions = $this->db->getTransactionCount($accountId, $filters);
         $totalPages = max(1, ceil($totalTransactions / $limit));
         
         // Get display name
@@ -79,6 +97,7 @@ class AccountController
             'account' => $account,
             'bank' => $bank,
             'transactions' => $transactions,
+            'filters' => $filters,
             'pagination' => [
                 'current_page' => $page,
                 'total_pages' => $totalPages,

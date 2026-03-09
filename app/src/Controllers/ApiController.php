@@ -815,8 +815,26 @@ class ApiController
         $limit = min(100, max(1, (int) ($params['limit'] ?? 30)));
         $offset = max(0, (int) ($params['offset'] ?? 0));
 
-        $transactions = $this->db->getTransactionsByAccountId($accountId, $limit, $offset);
-        $total = $this->db->getTransactionCount($accountId);
+        // Build filter array from query params
+        $filters = [];
+        if (!empty($params['search'])) {
+            $filters['search'] = trim($params['search']);
+        }
+        if (!empty($params['date_from'])) {
+            $filters['date_from'] = $params['date_from'];
+        }
+        if (!empty($params['date_to'])) {
+            $filters['date_to'] = $params['date_to'];
+        }
+        if (isset($params['amount_min']) && $params['amount_min'] !== '') {
+            $filters['amount_min'] = $params['amount_min'];
+        }
+        if (isset($params['amount_max']) && $params['amount_max'] !== '') {
+            $filters['amount_max'] = $params['amount_max'];
+        }
+
+        $transactions = $this->db->getTransactionsByAccountId($accountId, $limit, $offset, $filters);
+        $total = $this->db->getTransactionCount($accountId, $filters);
 
         return $this->jsonResponse($response, [
             'success' => true,

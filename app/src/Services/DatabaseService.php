@@ -844,24 +844,76 @@ class DatabaseService
         ];
     }
 
-    public function getTransactionsByAccountId(int $accountId, int $limit = 30, int $offset = 0): array
+    public function getTransactionsByAccountId(int $accountId, int $limit = 30, int $offset = 0, array $filters = []): array
     {
+        [$whereClause, $params] = $this->buildTransactionFilterQuery($accountId, $filters);
+
         $stmt = $this->pdo->prepare("
             SELECT * FROM transactions 
-            WHERE account_id = ? 
+            {$whereClause}
             ORDER BY booking_date DESC, id DESC
             LIMIT ? OFFSET ?
         ");
-        $stmt->execute([$accountId, $limit, $offset]);
+        $params[] = $limit;
+        $params[] = $offset;
+        $stmt->execute($params);
         return $stmt->fetchAll();
     }
 
-    public function getTransactionCount(int $accountId): int
+    public function getTransactionCount(int $accountId, array $filters = []): int
     {
-        $stmt = $this->pdo->prepare("SELECT COUNT(*) as count FROM transactions WHERE account_id = ?");
-        $stmt->execute([$accountId]);
+        [$whereClause, $params] = $this->buildTransactionFilterQuery($accountId, $filters);
+
+        $stmt = $this->pdo->prepare("SELECT COUNT(*) as count FROM transactions {$whereClause}");
+        $stmt->execute($params);
         $result = $stmt->fetch();
         return (int) ($result['count'] ?? 0);
+    }
+
+    /**
+     * Build WHERE clause and parameters for transaction filtering.
+     *
+     * Supported filter keys:
+     *  - search: free-text search across name, description, iban, booking_text
+     *  - date_from / date_to: booking_date range (inclusive)
+     *  - amount_min / amount_max: amount range (inclusive)
+     *
+     * @return array{0: string, 1: array} [whereClause, params]
+     */
+    private function buildTransactionFilterQuery(int $accountId, array $filters): array
+    {
+        $conditions = ['account_id = ?'];
+        $params = [$accountId];
+
+        if (!empty($filters['search'])) {
+            $term = '%' . $filters['search'] . '%';
+            $conditions[] = '(name LIKE ? OR description LIKE ? OR iban LIKE ? OR booking_text LIKE ?)';
+            $params = array_merge($params, [$term, $term, $term, $term]);
+        }
+
+        if (!empty($filters['date_from'])) {
+            $conditions[] = 'booking_date >= ?';
+            $params[] = $filters['date_from'];
+        }
+
+        if (!empty($filters['date_to'])) {
+            $conditions[] = 'booking_date <= ?';
+            $params[] = $filters['date_to'];
+        }
+
+        if (isset($filters['amount_min']) && $filters['amount_min'] !== '') {
+            $conditions[] = 'amount >= ?';
+            $params[] = (float) $filters['amount_min'];
+        }
+
+        if (isset($filters['amount_max']) && $filters['amount_max'] !== '') {
+            $conditions[] = 'amount <= ?';
+            $params[] = (float) $filters['amount_max'];
+        }
+
+        $whereClause = 'WHERE ' . implode(' AND ', $conditions);
+
+        return [$whereClause, $params];
     }
 
     public function getLatestTransactionDate(int $accountId): ?string
