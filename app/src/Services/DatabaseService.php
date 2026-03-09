@@ -886,8 +886,9 @@ class DatabaseService
         $params = [$accountId];
 
         if (!empty($filters['search'])) {
-            $term = '%' . $filters['search'] . '%';
-            $conditions[] = '(name LIKE ? OR description LIKE ? OR iban LIKE ? OR booking_text LIKE ?)';
+            $escaped = str_replace(['\\', '%', '_'], ['\\\\', '\\%', '\\_'], $filters['search']);
+            $term = '%' . $escaped . '%';
+            $conditions[] = "(name LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\' OR iban LIKE ? ESCAPE '\\' OR booking_text LIKE ? ESCAPE '\\')";
             $params = array_merge($params, [$term, $term, $term, $term]);
         }
 
