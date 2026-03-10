@@ -2042,6 +2042,33 @@ class ApiController
     }
     
     /**
+     * Set exclude from total flag for an account
+     */
+    public function setAccountExcludeFromTotal(Request $request, Response $response, array $args): Response
+    {
+        $accountId = (int) $args['id'];
+        $account = $this->db->getAccountById($accountId);
+        
+        if (!$account) {
+            return $this->jsonResponse($response, [
+                'success' => false,
+                'message' => 'Konto nicht gefunden'
+            ], 404);
+        }
+        
+        $data = $request->getParsedBody() ?? [];
+        $excluded = !empty($data['excluded']);
+        
+        $this->db->setAccountExcludeFromTotal($accountId, $excluded);
+        
+        return $this->jsonResponse($response, [
+            'success' => true,
+            'message' => $excluded ? 'Konto vom Gesamtsaldo ausgeschlossen' : 'Konto im Gesamtsaldo enthalten',
+            'exclude_from_total' => $excluded
+        ]);
+    }
+    
+    /**
      * Get TAN session validity info for a bank
      */
     public function getTanSessionInfo(Request $request, Response $response, array $args): Response

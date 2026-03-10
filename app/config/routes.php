@@ -59,6 +59,7 @@ return function (App $app) {
     $app->get('/api/mqtt/accounts', [ApiController::class, 'getMqttAccounts'])->setName('api.mqtt.accounts');
     $app->post('/api/accounts/{id}/mqtt-export', [ApiController::class, 'setAccountMqttExport'])->setName('api.accounts.mqttExport');
     $app->post('/api/accounts/{id}/tan-manual-approval', [ApiController::class, 'setAccountTanManualApproval'])->setName('api.accounts.tanManualApproval');
+    $app->post('/api/accounts/{id}/exclude-from-total', [ApiController::class, 'setAccountExcludeFromTotal'])->setName('api.accounts.excludeFromTotal');
     
     // TAN Session Info
     $app->get('/api/banks/{id}/tan-session', [ApiController::class, 'getTanSessionInfo'])->setName('api.banks.tanSession');
@@ -91,4 +92,5 @@ return function (App $app) {
     $app->get('/api/paypal/{id}/transactions', [PayPalController::class, 'getTransactions'])->setName('api.paypal.transactions');
     $app->get('/api/paypal/{id}/balance', [PayPalController::class, 'getBalance'])->setName('api.paypal.balance');
     $app->post('/api/paypal/{id}/mqtt-export', [PayPalController::class, 'setMqttExport'])->setName('api.paypal.mqttExport');
+    $app->post('/api/paypal/{id}/exclude-from-total', [PayPalController::class, 'setExcludeFromTotal'])->setName('api.paypal.excludeFromTotal');
 };

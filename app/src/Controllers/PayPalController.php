@@ -250,4 +250,22 @@ class PayPalController
             'mqtt_export' => $enabled
         ]);
     }
+    
+    /**
+     * Set exclude from total flag
+     */
+    public function setExcludeFromTotal(Request $request, Response $response, array $args): Response
+    {
+        $accountId = (int) $args['id'];
+        $data = $request->getParsedBody() ?? [];
+        $excluded = !empty($data['excluded']);
+        
+        $this->db->setPayPalAccountExcludeFromTotal($accountId, $excluded);
+        
+        return $this->jsonResponse($response, [
+            'success' => true,
+            'message' => $excluded ? 'PayPal-Konto vom Gesamtsaldo ausgeschlossen' : 'PayPal-Konto im Gesamtsaldo enthalten',
+            'exclude_from_total' => $excluded
+        ]);
+    }
 }

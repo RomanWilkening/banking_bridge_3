@@ -418,6 +418,7 @@
         <div class="px-4 py-5 sm:px-6 border-b border-gray-200 flex justify-between items-center">
             <h3 class="text-lg font-medium leading-6 text-gray-900">Konten</h3>
             <div class="flex items-center gap-3">
+                <span class="text-xs text-gray-400" title="Saldo vom Gesamtsaldo auf dem Dashboard ausschließen">💰 Saldo</span>
                 <span class="text-xs text-gray-400" title="Manuelle TAN-Freigabe: Bei abgelaufener TAN wird kein automatischer TAN-Abruf durchgeführt – TAN muss manuell über die UI bestätigt werden. Das Konto wird weiterhin synchronisiert.">🔐 TAN</span>
                 <span class="text-xs text-gray-400" title="MQTT aktivieren um Kontodaten an Home Assistant zu senden">📡 MQTT</span>
             </div>
@@ -477,6 +478,17 @@
                             <p class="text-sm text-gray-400">Kein Saldo</p>
                             {% endif %}
                         </div>
+                        <!-- Exclude from Total Toggle -->
+                        <div x-data="excludeFromTotalToggle({{ account.id }}, {{ account.exclude_from_total ?? 0 }})" class="mr-2" @click.stop>
+                            <button @click="toggle" type="button" 
+                                    class="relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
+                                    :class="excluded ? 'bg-blue-500' : 'bg-gray-200'"
+                                    :title="excluded ? 'Saldo wird NICHT im Gesamtsaldo berücksichtigt' : 'Saldo wird im Gesamtsaldo berücksichtigt'">
+                                <span class="sr-only">Vom Gesamtsaldo ausschließen</span>
+                                <span class="pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out"
+                                      :class="excluded ? 'translate-x-5' : 'translate-x-0'"></span>
+                            </button>
+                        </div>
                         <!-- TAN Manual Approval Toggle -->
                         <div x-data="tanApprovalToggle({{ account.id }}, {{ account.tan_manual_approval ?? 0 }})" class="mr-2" @click.stop>
                             <button @click="toggle" type="button" 
@@ -527,6 +539,7 @@
                 <span class="mr-2">📈</span> Depots
             </h3>
             <div class="flex items-center gap-3">
+                <span class="text-xs text-gray-400" title="Saldo vom Gesamtsaldo auf dem Dashboard ausschließen">💰 Saldo</span>
                 <span class="text-xs text-gray-400" title="Manuelle TAN-Freigabe: Bei abgelaufener TAN wird kein automatischer TAN-Abruf durchgeführt – TAN muss manuell über die UI bestätigt werden. Das Depot wird weiterhin synchronisiert.">🔐 TAN</span>
                 <span class="text-xs text-gray-400" title="MQTT aktivieren um Depotdaten an Home Assistant zu senden">📡 MQTT</span>
             </div>
@@ -569,6 +582,17 @@
                             {% else %}
                             <p class="text-sm text-gray-400">Kein Bestand</p>
                             {% endif %}
+                        </div>
+                        <!-- Exclude from Total Toggle -->
+                        <div x-data="excludeFromTotalToggle({{ depot.id }}, {{ depot.exclude_from_total ?? 0 }})" class="mr-2" @click.stop>
+                            <button @click="toggle" type="button" 
+                                    class="relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
+                                    :class="excluded ? 'bg-blue-500' : 'bg-gray-200'"
+                                    :title="excluded ? 'Saldo wird NICHT im Gesamtsaldo berücksichtigt' : 'Saldo wird im Gesamtsaldo berücksichtigt'">
+                                <span class="sr-only">Vom Gesamtsaldo ausschließen</span>
+                                <span class="pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out"
+                                      :class="excluded ? 'translate-x-5' : 'translate-x-0'"></span>
+                            </button>
                         </div>
                         <!-- TAN Manual Approval Toggle -->
                         <div x-data="tanApprovalToggle({{ depot.id }}, {{ depot.tan_manual_approval ?? 0 }})" class="mr-2" @click.stop>
@@ -895,6 +919,34 @@ function tanApprovalToggle(accountId, initialValue) {
                 
                 if (data.success) {
                     this.enabled = newValue;
+                } else {
+                    alert(data.message || 'Fehler beim Aktualisieren');
+                }
+            } catch (error) {
+                alert('Netzwerkfehler: ' + error.message);
+            }
+        }
+    };
+}
+
+function excludeFromTotalToggle(accountId, initialValue) {
+    return {
+        accountId: accountId,
+        excluded: initialValue == 1,
+        
+        async toggle() {
+            const newValue = !this.excluded;
+            
+            try {
+                const response = await fetch(`/api/accounts/${this.accountId}/exclude-from-total`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ excluded: newValue })
+                });
+                const data = await response.json();
+                
+                if (data.success) {
+                    this.excluded = newValue;
                 } else {
                     alert(data.message || 'Fehler beim Aktualisieren');
                 }

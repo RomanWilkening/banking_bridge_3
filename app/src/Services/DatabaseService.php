@@ -230,6 +230,11 @@ class DatabaseService
             $this->pdo->exec("ALTER TABLE accounts ADD COLUMN tan_manual_approval INTEGER DEFAULT 0");
         }
         
+        // Add exclude_from_total for per-account total balance control
+        if (!in_array('exclude_from_total', $columnNames)) {
+            $this->pdo->exec("ALTER TABLE accounts ADD COLUMN exclude_from_total INTEGER DEFAULT 0");
+        }
+        
         // Create PayPal accounts table if it doesn't exist
         $this->pdo->exec("
             CREATE TABLE IF NOT EXISTS paypal_accounts (
@@ -275,6 +280,14 @@ class DatabaseService
             CREATE INDEX IF NOT EXISTS idx_paypal_transactions_account 
             ON paypal_transactions(paypal_account_id, timestamp DESC)
         ");
+        
+        // Add exclude_from_total for PayPal accounts
+        $paypalColumns = $this->pdo->query("PRAGMA table_info(paypal_accounts)")->fetchAll();
+        $paypalColumnNames = array_column($paypalColumns, 'name');
+        
+        if (!in_array('exclude_from_total', $paypalColumnNames)) {
+            $this->pdo->exec("ALTER TABLE paypal_accounts ADD COLUMN exclude_from_total INTEGER DEFAULT 0");
+        }
     }
 
     public function getPdo(): PDO
@@ -407,6 +420,15 @@ class DatabaseService
     {
         $stmt = $this->pdo->prepare("UPDATE paypal_accounts SET mqtt_export = ? WHERE id = ?");
         return $stmt->execute([$enabled ? 1 : 0, $id]);
+    }
+
+    /**
+     * Set exclude from total flag for a PayPal account
+     */
+    public function setPayPalAccountExcludeFromTotal(int $id, bool $excluded): bool
+    {
+        $stmt = $this->pdo->prepare("UPDATE paypal_accounts SET exclude_from_total = ? WHERE id = ?");
+        return $stmt->execute([$excluded ? 1 : 0, $id]);
     }
 
     // PayPal Transaction Methods
@@ -1285,6 +1307,18 @@ class DatabaseService
             WHERE id = ?
         ");
         return $stmt->execute([$enabled ? 1 : 0, $accountId]);
+    }
+    
+    /**
+     * Set exclude from total flag for an account
+     */
+    public function setAccountExcludeFromTotal(int $accountId, bool $excluded): bool
+    {
+        $stmt = $this->pdo->prepare("
+            UPDATE accounts SET exclude_from_total = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+        ");
+        return $stmt->execute([$excluded ? 1 : 0, $accountId]);
     }
     
     /**
