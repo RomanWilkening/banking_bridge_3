@@ -61,6 +61,12 @@
                     <span class="ml-2 text-sm text-gray-700">MQTT-Export</span>
                 </label>
                 
+                <label class="inline-flex items-center">
+                    <input type="checkbox" x-model="excludeFromTotal" @change="toggleExcludeFromTotal"
+                           class="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500">
+                    <span class="ml-2 text-sm text-gray-700">Vom Gesamtsaldo ausschließen</span>
+                </label>
+                
                 <form method="POST" action="/paypal/{{ account.id }}/delete" class="ml-auto"
                       onsubmit="return confirm('PayPal-Konto wirklich löschen? Alle Transaktionen werden ebenfalls gelöscht.')">
                     <button type="submit" class="inline-flex items-center rounded-md bg-red-50 px-3 py-2 text-sm font-semibold text-red-700 hover:bg-red-100">
@@ -162,6 +168,7 @@ function paypalAccount() {
         message: '',
         messageType: 'success',
         mqttExport: {{ account.mqtt_export ? 'true' : 'false' }},
+        excludeFromTotal: {{ account.exclude_from_total ? 'true' : 'false' }},
         
         async sync() {
             this.syncing = true;
@@ -198,6 +205,18 @@ function paypalAccount() {
                 });
             } catch (error) {
                 console.error('Failed to toggle MQTT export:', error);
+            }
+        },
+        
+        async toggleExcludeFromTotal() {
+            try {
+                await fetch('/api/paypal/{{ account.id }}/exclude-from-total', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ excluded: this.excludeFromTotal })
+                });
+            } catch (error) {
+                console.error('Failed to toggle exclude from total:', error);
             }
         }
     };

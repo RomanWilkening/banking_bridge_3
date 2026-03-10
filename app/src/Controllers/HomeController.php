@@ -24,10 +24,10 @@ class HomeController
             $bank['accounts'] = $this->db->getAccountsByBankId($bank['id']);
             $bank['account_count'] = count($bank['accounts']);
             
-            // Calculate total balance
+            // Calculate total balance (only accounts not excluded from total)
             $totalBalance = 0;
             foreach ($bank['accounts'] as $account) {
-                if ($account['balance'] !== null) {
+                if ($account['balance'] !== null && empty($account['exclude_from_total'])) {
                     $totalBalance += $account['balance'];
                 }
             }
@@ -37,10 +37,10 @@ class HomeController
         // Get PayPal accounts
         $paypalAccounts = $this->db->getAllPayPalAccounts();
         
-        // Calculate total PayPal balance
+        // Calculate total PayPal balance (only accounts not excluded from total)
         $paypalTotalBalance = 0;
         foreach ($paypalAccounts as $paypal) {
-            if ($paypal['balance'] !== null) {
+            if ($paypal['balance'] !== null && empty($paypal['exclude_from_total'])) {
                 $paypalTotalBalance += $paypal['balance'];
             }
         }
