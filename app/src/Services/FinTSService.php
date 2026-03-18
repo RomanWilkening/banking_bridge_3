@@ -2342,6 +2342,14 @@ class FinTSService
             // If MT940 was successful (even with 0 transactions), return that result
             // This ensures we at least get balance info, etc.
             if ($mt940Result !== null && ($mt940Result['success'] ?? false)) {
+                // Ensure balance is always fetched
+                if (empty($mt940Result['balance'])) {
+                    $balance = $this->getAccountBalance($sepaAccount);
+                    if ($balance) {
+                        $mt940Result['balance'] = $balance['amount'];
+                        $mt940Result['balance_date'] = $balance['date'];
+                    }
+                }
                 $this->logger->info('Returning MT940 result (may have 0 transactions)', [
                     'transactions' => count($mt940Result['transactions'] ?? []),
                     'balance' => $mt940Result['balance'] ?? null
@@ -2353,6 +2361,14 @@ class FinTSService
             
             // Same for CAMT
             if ($camtResult !== null && ($camtResult['success'] ?? false)) {
+                // Ensure balance is always fetched
+                if (empty($camtResult['balance'])) {
+                    $balance = $this->getAccountBalance($sepaAccount);
+                    if ($balance) {
+                        $camtResult['balance'] = $balance['amount'];
+                        $camtResult['balance_date'] = $balance['date'];
+                    }
+                }
                 $this->logger->info('Returning CAMT result (may have 0 transactions)', [
                     'transactions' => count($camtResult['transactions'] ?? [])
                 ]);
