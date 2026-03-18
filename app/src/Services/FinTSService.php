@@ -2130,6 +2130,10 @@ class FinTSService
     /**
      * Ensure a transaction result includes balance data.
      * If the result doesn't have a balance, fetch it explicitly via getAccountBalance.
+     *
+     * @param array &$result The transaction result array to augment with balance data
+     * @param SEPAAccount $sepaAccount The SEPA account to fetch the balance for
+     * @return void
      */
     private function ensureBalanceInResult(array &$result, SEPAAccount $sepaAccount): void
     {
