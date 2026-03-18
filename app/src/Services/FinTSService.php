@@ -2128,6 +2128,25 @@ class FinTSService
     }
 
     /**
+     * Ensure a transaction result includes balance data.
+     * If the result doesn't have a balance, fetch it explicitly via getAccountBalance.
+     *
+     * @param array &$result The transaction result array to augment with balance data
+     * @param SEPAAccount $sepaAccount The SEPA account to fetch the balance for
+     * @return void
+     */
+    private function ensureBalanceInResult(array &$result, SEPAAccount $sepaAccount): void
+    {
+        if (!isset($result['balance'])) {
+            $balance = $this->getAccountBalance($sepaAccount);
+            if ($balance) {
+                $result['balance'] = $balance['amount'];
+                $result['balance_date'] = $balance['date'];
+            }
+        }
+    }
+
+    /**
      * Sync account transactions - combined method that handles everything in one session
      * 
      * @param array $bankConfig Bank configuration
@@ -2279,6 +2298,7 @@ class FinTSService
                         
                         // If we got transactions, return them
                         if ($txCount > 0) {
+                            $this->ensureBalanceInResult($mt940Result, $sepaAccount);
                             $mt940Result['persisted_instance'] = $this->persistAfterClose();
                             return $mt940Result;
                         }
@@ -2306,6 +2326,7 @@ class FinTSService
                         
                         // If CAMT has transactions, return it
                         if ($txCount > 0) {
+                            $this->ensureBalanceInResult($camtResult, $sepaAccount);
                             $camtResult['persisted_instance'] = $this->persistAfterClose();
                             return $camtResult;
                         }
@@ -2326,6 +2347,7 @@ class FinTSService
             // If MT940 was successful (even with 0 transactions), return that result
             // This ensures we at least get balance info, etc.
             if ($mt940Result !== null && ($mt940Result['success'] ?? false)) {
+                $this->ensureBalanceInResult($mt940Result, $sepaAccount);
                 $this->logger->info('Returning MT940 result (may have 0 transactions)', [
                     'transactions' => count($mt940Result['transactions'] ?? []),
                     'balance' => $mt940Result['balance'] ?? null
@@ -2337,6 +2359,7 @@ class FinTSService
             
             // Same for CAMT
             if ($camtResult !== null && ($camtResult['success'] ?? false)) {
+                $this->ensureBalanceInResult($camtResult, $sepaAccount);
                 $this->logger->info('Returning CAMT result (may have 0 transactions)', [
                     'transactions' => count($camtResult['transactions'] ?? [])
                 ]);

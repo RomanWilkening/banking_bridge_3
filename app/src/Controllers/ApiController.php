@@ -115,11 +115,12 @@ class ApiController
     }
     
     /**
-     * Sync account balances from bank
+     * Sync account balances (and transactions) from bank
+     * Now performs a full sync (balances + transactions + holdings) for consistency
      */
     public function syncBalances(Request $request, Response $response, array $args): Response
     {
-        $this->logger->info('=== SYNC BALANCES STARTED ===', ['args' => $args]);
+        $this->logger->info('=== SYNC BALANCES STARTED (full sync) ===', ['args' => $args]);
         
         $bankId = (int) $args['id'];
         $bank = $this->db->getBankById($bankId);
@@ -131,6 +132,15 @@ class ApiController
             ], 404);
         }
         
+        // Get all accounts for this bank
+        $accounts = $this->db->getAccountsByBankId($bankId);
+        if (empty($accounts)) {
+            return $this->jsonResponse($response, [
+                'success' => false,
+                'message' => 'Keine Konten gefunden. Bitte zuerst Konten abrufen.'
+            ], 400);
+        }
+        
         // Try to use existing session (preserves kundensystemId for TAN-free access per PSD2)
         $existingSession = $this->db->getFinTSSession($bankId);
         $persistedInstance = $existingSession ? $existingSession['session_data'] : null;
@@ -139,17 +149,23 @@ class ApiController
             'has_existing_session' => $persistedInstance !== null
         ]);
         
-        $result = $this->fintsService->fetchAccountBalances([
-            'bank_code' => $bank['bank_code'],
-            'fints_url' => $bank['fints_url'],
-            'username' => $bank['username'],
-            'password' => $bank['password']
-        ], $persistedInstance);
+        // Use syncAll to always fetch balances AND transactions for consistency
+        $result = $this->fintsService->syncAll(
+            [
+                'bank_code' => $bank['bank_code'],
+                'fints_url' => $bank['fints_url'],
+                'username' => $bank['username'],
+                'password' => $bank['password']
+            ],
+            $accounts,
+            $persistedInstance
+        );
         
         // Handle TAN requirement
         if (isset($result['needs_tan']) && $result['needs_tan']) {
             $this->db->saveFinTSSession($bankId, $result['persisted_instance']);
             $_SESSION['fints_action_' . $bankId] = $result['persisted_action'];
+            $_SESSION['fints_sync_all_bank_id'] = $bankId;
             
             return $this->jsonResponse($response, [
                 'success' => false,
@@ -162,42 +178,8 @@ class ApiController
             return $this->jsonResponse($response, $result);
         }
         
-        // Update balances in database
-        $updatedCount = 0;
-        if (isset($result['balances'])) {
-            foreach ($result['balances'] as $balanceData) {
-                // Find account by IBAN
-                $accounts = $this->db->getAccountsByBankId($bankId);
-                foreach ($accounts as $account) {
-                    if ($account['iban'] === $balanceData['iban']) {
-                        $this->db->updateAccountBalance(
-                            $account['id'],
-                            $balanceData['balance'],
-                            $balanceData['balance_date']
-                        );
-                        $updatedCount++;
-                        $this->logger->info('Updated balance', [
-                            'account_id' => $account['id'],
-                            'iban' => $balanceData['iban'],
-                            'balance' => $balanceData['balance']
-                        ]);
-                        break;
-                    }
-                }
-            }
-        }
-        
-        // Save session
-        if (isset($result['persisted_instance'])) {
-            $this->db->saveFinTSSession($bankId, $result['persisted_instance']);
-        }
-        
-        return $this->jsonResponse($response, [
-            'success' => true,
-            'message' => "Kontosalden aktualisiert",
-            'updated_count' => $updatedCount,
-            'balances' => $result['balances'] ?? []
-        ]);
+        // Process results using same helper as syncAll
+        return $this->processSyncAllResults($bankId, $result, $response);
     }
     
     /**
