@@ -2279,6 +2279,14 @@ class FinTSService
                         
                         // If we got transactions, return them
                         if ($txCount > 0) {
+                            // Ensure balance is always fetched
+                            if (empty($mt940Result['balance'])) {
+                                $balance = $this->getAccountBalance($sepaAccount);
+                                if ($balance) {
+                                    $mt940Result['balance'] = $balance['amount'];
+                                    $mt940Result['balance_date'] = $balance['date'];
+                                }
+                            }
                             $mt940Result['persisted_instance'] = $this->persistAfterClose();
                             return $mt940Result;
                         }
@@ -2306,6 +2314,14 @@ class FinTSService
                         
                         // If CAMT has transactions, return it
                         if ($txCount > 0) {
+                            // Ensure balance is always fetched
+                            if (empty($camtResult['balance'])) {
+                                $balance = $this->getAccountBalance($sepaAccount);
+                                if ($balance) {
+                                    $camtResult['balance'] = $balance['amount'];
+                                    $camtResult['balance_date'] = $balance['date'];
+                                }
+                            }
                             $camtResult['persisted_instance'] = $this->persistAfterClose();
                             return $camtResult;
                         }
