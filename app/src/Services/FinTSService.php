@@ -2280,7 +2280,7 @@ class FinTSService
                         // If we got transactions, return them
                         if ($txCount > 0) {
                             // Ensure balance is always fetched
-                            if (empty($mt940Result['balance'])) {
+                            if (!isset($mt940Result['balance'])) {
                                 $balance = $this->getAccountBalance($sepaAccount);
                                 if ($balance) {
                                     $mt940Result['balance'] = $balance['amount'];
@@ -2315,7 +2315,7 @@ class FinTSService
                         // If CAMT has transactions, return it
                         if ($txCount > 0) {
                             // Ensure balance is always fetched
-                            if (empty($camtResult['balance'])) {
+                            if (!isset($camtResult['balance'])) {
                                 $balance = $this->getAccountBalance($sepaAccount);
                                 if ($balance) {
                                     $camtResult['balance'] = $balance['amount'];
@@ -2343,7 +2343,7 @@ class FinTSService
             // This ensures we at least get balance info, etc.
             if ($mt940Result !== null && ($mt940Result['success'] ?? false)) {
                 // Ensure balance is always fetched
-                if (empty($mt940Result['balance'])) {
+                if (!isset($mt940Result['balance'])) {
                     $balance = $this->getAccountBalance($sepaAccount);
                     if ($balance) {
                         $mt940Result['balance'] = $balance['amount'];
@@ -2362,7 +2362,7 @@ class FinTSService
             // Same for CAMT
             if ($camtResult !== null && ($camtResult['success'] ?? false)) {
                 // Ensure balance is always fetched
-                if (empty($camtResult['balance'])) {
+                if (!isset($camtResult['balance'])) {
                     $balance = $this->getAccountBalance($sepaAccount);
                     if ($balance) {
                         $camtResult['balance'] = $balance['amount'];
