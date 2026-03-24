@@ -2128,8 +2128,12 @@ class FinTSService
     }
 
     /**
-     * Ensure a transaction result includes balance data.
-     * If the result doesn't have a balance, fetch it explicitly via getAccountBalance.
+     * Ensure a transaction result includes correct balance data.
+     * Always attempts to fetch the balance via GetBalance (HISAL) which provides
+     * correctly signed balances directly from the Sdo object. This intentionally
+     * overrides any MT940/CAMT-derived balance to guard against sign handling
+     * inconsistencies in the MT940 parser. Falls back to the existing balance
+     * if the HISAL fetch fails.
      *
      * @param array &$result The transaction result array to augment with balance data
      * @param SEPAAccount $sepaAccount The SEPA account to fetch the balance for
@@ -2137,12 +2141,26 @@ class FinTSService
      */
     private function ensureBalanceInResult(array &$result, SEPAAccount $sepaAccount): void
     {
-        if (!isset($result['balance'])) {
+        try {
             $balance = $this->getAccountBalance($sepaAccount);
             if ($balance) {
+                $this->logger->debug('Using HISAL balance (correctly signed)', [
+                    'amount' => $balance['amount'],
+                    'previous_balance' => $result['balance'] ?? null
+                ]);
                 $result['balance'] = $balance['amount'];
                 $result['balance_date'] = $balance['date'];
+                return;
             }
+        } catch (\Throwable $e) {
+            $this->logger->debug('HISAL balance fetch failed, keeping existing balance', [
+                'error' => $e->getMessage(),
+                'existing_balance' => $result['balance'] ?? null
+            ]);
+        }
+
+        if (!isset($result['balance'])) {
+            $this->logger->debug('No balance available from any source');
         }
     }
 
