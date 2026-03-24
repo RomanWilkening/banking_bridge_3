@@ -2130,8 +2130,10 @@ class FinTSService
     /**
      * Ensure a transaction result includes correct balance data.
      * Always attempts to fetch the balance via GetBalance (HISAL) which provides
-     * correctly signed balances. Falls back to the balance from MT940/CAMT if
-     * the HISAL fetch fails.
+     * correctly signed balances directly from the Sdo object. This intentionally
+     * overrides any MT940/CAMT-derived balance to guard against sign handling
+     * inconsistencies in the MT940 parser. Falls back to the existing balance
+     * if the HISAL fetch fails.
      *
      * @param array &$result The transaction result array to augment with balance data
      * @param SEPAAccount $sepaAccount The SEPA account to fetch the balance for

@@ -74,7 +74,10 @@ class StatementOfAccount
                 $statementModel = new Statement();
                 $statementModel->setDate(static::parseDate($date));
                 if (isset($statement['start_balance']['amount'])) {
-                    // Apply credit/debit sign to start balance
+                    // Apply credit/debit sign to start balance.
+                    // The MT940 parser stores start balance amounts as positive values
+                    // (unlike end balance which is already negated for debit).
+                    // Use -abs() to ensure debit amounts are always negative.
                     $startAmount = (float) $statement['start_balance']['amount'];
                     if (isset($statement['start_balance']['credit_debit']) && $statement['start_balance']['credit_debit'] == MT940::CD_DEBIT) {
                         $startAmount = -abs($startAmount);
