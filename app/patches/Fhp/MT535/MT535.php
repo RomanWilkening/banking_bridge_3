@@ -135,17 +135,6 @@ class MT535
                 }
             }
             
-            // Fallback: Standard format from :70E::HOLD//
-            // Standard format: :70E::HOLD//1STK23,968293+EUR
-            if ($holding->getAcquisitionPrice() === null) {
-                if (preg_match('/:70E::HOLD\/\/\d*STK(\d+),(\d+)\+([A-Z]{3})/s', $block, $iwn)) {
-                    $holding->setAcquisitionPrice((float) ($iwn[1] . '.' . $iwn[2]));
-                    if ($holding->getCurrency() === null) {
-                        $holding->setCurrency($iwn[3]);
-                    }
-                }
-            }
-
             // === Current Price ===
             // Standard format: :90B::MRKT//ACTU/EUR76,06 or :90A::
             if (preg_match('/:90(.)::(.*?):/sm', $block, $iwn)) {
@@ -177,6 +166,26 @@ class MT535
                 preg_match('/^.{11}(.*)/sm', $iwn[1], $r);
                 if (isset($r[1])) {
                     $holding->setAmount(floatval(str_replace(',', '.', $r[1])));
+                }
+            }
+
+            // Fallback: Standard format from :70E::HOLD//
+            // Standard format: :70E::HOLD//1STK23,968293+EUR
+            // "1STK" means "per 1 Stück (piece)" - the value is a per-unit acquisition price.
+            // We multiply by amount to get the total acquisition value, consistent with
+            // the Baader format (:70C::SUBB//) which already provides the total value.
+            if ($holding->getAcquisitionPrice() === null) {
+                if (preg_match('/:70E::HOLD\/\/\d*STK(\d+),(\d+)\+([A-Z]{3})/s', $block, $iwn)) {
+                    $unitAcquisitionPrice = (float) ($iwn[1] . '.' . $iwn[2]);
+                    $amount = $holding->getAmount();
+                    if ($amount !== null && $amount > 0) {
+                        $holding->setAcquisitionPrice($unitAcquisitionPrice * $amount);
+                    }
+                    // If amount is null or zero, we cannot compute total acquisition value
+                    // so we leave acquisitionPrice as null to avoid incorrect P/L calculations
+                    if ($holding->getCurrency() === null) {
+                        $holding->setCurrency($iwn[3]);
+                    }
                 }
             }
 
