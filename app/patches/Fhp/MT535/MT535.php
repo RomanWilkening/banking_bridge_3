@@ -180,9 +180,9 @@ class MT535
                     $amount = $holding->getAmount();
                     if ($amount !== null && $amount > 0) {
                         $holding->setAcquisitionPrice($unitAcquisitionPrice * $amount);
-                    } else {
-                        $holding->setAcquisitionPrice($unitAcquisitionPrice);
                     }
+                    // If amount is null or zero, we cannot compute total acquisition value
+                    // so we leave acquisitionPrice as null to avoid incorrect P/L calculations
                     if ($holding->getCurrency() === null) {
                         $holding->setCurrency($iwn[3]);
                     }
