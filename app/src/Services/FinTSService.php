@@ -2608,9 +2608,10 @@ class FinTSService
                 $currency = $position->getCurrency() ?? 'EUR';
                 $priceDate = $position->getDate();
                 
-                // The value from :70E::HOLD// is the TOTAL acquisition value, not price per unit
-                // We need to calculate the average acquisition price per unit
-                $acquisitionTotalValue = $position->getAcquisitionPrice(); // This is actually total value
+                // getAcquisitionPrice() returns the TOTAL acquisition value:
+                // - Baader :70C::SUBB provides total directly
+                // - Standard :70E::HOLD provides per-unit, MT535 parser multiplies by quantity
+                $acquisitionTotalValue = $position->getAcquisitionPrice();
                 $purchasePrice = null;
                 
                 if ($acquisitionTotalValue !== null && $quantity > 0) {

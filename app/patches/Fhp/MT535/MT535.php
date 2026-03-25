@@ -55,8 +55,11 @@ class MT535
     {
         $result = new StatementOfHoldings();
         preg_match_all('/:16R:FIN(.*?):16S:FIN/sm', $this->cleanedRawData, $blocks);
+        // Also extract raw FIN blocks for multiline-sensitive parsing (e.g., :70E::HOLD)
+        preg_match_all('/:16R:FIN(.*?):16S:FIN/sm', $this->rawData, $rawBlocks);
         
-        foreach ($blocks[1] as $block) {
+        foreach ($blocks[1] as $blockIndex => $block) {
+            $rawBlock = isset($rawBlocks[1][$blockIndex]) ? $rawBlocks[1][$blockIndex] : '';
             $holding = new Holding();
             
             // === ISIN, WKN & Name Parsing ===
@@ -136,12 +139,37 @@ class MT535
             }
             
             // Fallback: Standard format from :70E::HOLD//
-            // Standard format: :70E::HOLD//1STK23,968293+EUR
+            // The :70E::HOLD field provides the per-unit acquisition price (Einstandskurs).
+            // Format: :70E::HOLD//[n]STK\r\n[line_no][price]+[currency]
+            // In multiline format, continuation lines start with a line sequence number (e.g., "2")
+            // which gets incorrectly concatenated with the price during cleanup.
+            // We parse from raw data first to handle multiline correctly.
+            $acquisitionIsPerUnit = false;
             if ($holding->getAcquisitionPrice() === null) {
-                if (preg_match('/:70E::HOLD\/\/\d*STK(\d+),(\d+)\+([A-Z]{3})/s', $block, $iwn)) {
-                    $holding->setAcquisitionPrice((float) ($iwn[1] . '.' . $iwn[2]));
-                    if ($holding->getCurrency() === null) {
-                        $holding->setCurrency($iwn[3]);
+                $parsedAcqPrice = null;
+                $parsedAcqUnits = 1;
+                $parsedAcqCurrency = null;
+
+                // Try multiline format from raw block first:
+                // :70E::HOLD//1STK\r\n220,459803+EUR → line "2" is prefix, actual price is 20,459803
+                if (preg_match('/:70E::HOLD\/\/(\d*)STK\s*[\r\n]+\d([\d]+[,.][\d]+)[+-]([A-Z]{3})/', $rawBlock, $iwn)) {
+                    $parsedAcqUnits = !empty($iwn[1]) ? (int) $iwn[1] : 1;
+                    $parsedAcqPrice = floatval(str_replace(',', '.', $iwn[2]));
+                    $parsedAcqCurrency = $iwn[3];
+                }
+                // Single-line format (no continuation line): :70E::HOLD//1STK23,968293+EUR
+                elseif (preg_match('/:70E::HOLD\/\/(\d*)STK([\d]+[,.][\d]+)[+-]([A-Z]{3})/s', $block, $iwn)) {
+                    $parsedAcqUnits = !empty($iwn[1]) ? (int) $iwn[1] : 1;
+                    $parsedAcqPrice = floatval(str_replace(',', '.', $iwn[2]));
+                    $parsedAcqCurrency = $iwn[3];
+                }
+
+                if ($parsedAcqPrice !== null) {
+                    // Price is per $parsedAcqUnits units, normalize to per-unit
+                    $holding->setAcquisitionPrice($parsedAcqPrice / $parsedAcqUnits);
+                    $acquisitionIsPerUnit = true;
+                    if ($parsedAcqCurrency !== null && $holding->getCurrency() === null) {
+                        $holding->setCurrency($parsedAcqCurrency);
                     }
                 }
             }
@@ -178,6 +206,14 @@ class MT535
                 if (isset($r[1])) {
                     $holding->setAmount(floatval(str_replace(',', '.', $r[1])));
                 }
+            }
+
+            // Convert per-unit acquisition price to total acquisition value
+            // processDepotResult() expects getAcquisitionPrice() to return the TOTAL value.
+            // Baader :70C::SUBB already provides total; standard :70E::HOLD provides per-unit.
+            if ($acquisitionIsPerUnit && $holding->getAcquisitionPrice() !== null
+                && $holding->getAmount() !== null && $holding->getAmount() > 0) {
+                $holding->setAcquisitionPrice($holding->getAcquisitionPrice() * $holding->getAmount());
             }
 
             // === Total Value (Gesamtwert) ===
