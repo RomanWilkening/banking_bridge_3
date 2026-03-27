@@ -2079,13 +2079,11 @@ class ApiController
         $expiresAt = new \DateTime($session['expires_at']);
         $now = new \DateTime();
         
-        $remainingInterval = $now->diff($expiresAt);
-        $remainingDays = max(0, (int) $remainingInterval->format('%r%a'));
+        $remainingSeconds = max(0, $expiresAt->getTimestamp() - $now->getTimestamp());
+        $remainingDays = (int) ceil($remainingSeconds / 86400);
         
-        $totalInterval = $createdAt->diff($expiresAt);
-        $totalDays = (int) $totalInterval->format('%a');
-        $elapsedInterval = $createdAt->diff($now);
-        $elapsedDays = (int) $elapsedInterval->format('%a');
+        $totalDays = (int) ceil(($expiresAt->getTimestamp() - $createdAt->getTimestamp()) / 86400);
+        $elapsedDays = max(0, $totalDays - $remainingDays);
         
         $progressPercent = $totalDays > 0 ? min(100, round(($elapsedDays / $totalDays) * 100)) : 100;
         

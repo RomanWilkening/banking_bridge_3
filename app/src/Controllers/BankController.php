@@ -115,9 +115,10 @@ class BankController
             $createdAt = new \DateTime($session['created_at']);
             $expiresAt = new \DateTime($session['expires_at']);
             $now = new \DateTime();
-            $remainingDays = max(0, (int) $now->diff($expiresAt)->format('%r%a'));
-            $totalDays = (int) $createdAt->diff($expiresAt)->format('%a');
-            $elapsedDays = (int) $createdAt->diff($now)->format('%a');
+            $remainingSeconds = max(0, $expiresAt->getTimestamp() - $now->getTimestamp());
+            $remainingDays = (int) ceil($remainingSeconds / 86400);
+            $totalDays = (int) ceil(($expiresAt->getTimestamp() - $createdAt->getTimestamp()) / 86400);
+            $elapsedDays = max(0, $totalDays - $remainingDays);
             $progressPercent = $totalDays > 0 ? min(100, round(($elapsedDays / $totalDays) * 100)) : 100;
             
             $tanSession = [
