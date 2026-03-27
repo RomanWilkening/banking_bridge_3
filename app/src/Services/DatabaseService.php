@@ -654,13 +654,43 @@ class DatabaseService
     // Session Methods
     public function saveFinTSSession(int $bankId, string $sessionData, ?string $tanMode = null, ?string $tanMedium = null): int
     {
-        // Delete old sessions for this bank
-        $stmt = $this->pdo->prepare("DELETE FROM fints_sessions WHERE bank_id = ?");
-        $stmt->execute([$bankId]);
-
         // Base64-encode the session data to safely store binary data
         // phpFinTS persist() returns serialized data that may contain binary content
         $encodedSessionData = base64_encode($sessionData);
+
+        // Check if a valid session already exists for this bank
+        $stmt = $this->pdo->prepare("
+            SELECT id FROM fints_sessions
+            WHERE bank_id = ? AND expires_at > datetime('now')
+            ORDER BY created_at DESC LIMIT 1
+        ");
+        $stmt->execute([$bankId]);
+        $existing = $stmt->fetch();
+
+        if ($existing) {
+            // Update only session_data, preserve created_at and expires_at so the
+            // 90-day PSD2 countdown is not reset on every sync
+            $params = [$encodedSessionData];
+            $tanUpdate = '';
+            if ($tanMode !== null) {
+                $tanUpdate .= ', tan_mode = ?';
+                $params[] = $tanMode;
+            }
+            if ($tanMedium !== null) {
+                $tanUpdate .= ', tan_medium = ?';
+                $params[] = $tanMedium;
+            }
+            $params[] = $existing['id'];
+            $stmt = $this->pdo->prepare("
+                UPDATE fints_sessions SET session_data = ?{$tanUpdate} WHERE id = ?
+            ");
+            $stmt->execute($params);
+            return (int) $existing['id'];
+        }
+
+        // No valid session exists — delete any expired leftovers and create a new one
+        $stmt = $this->pdo->prepare("DELETE FROM fints_sessions WHERE bank_id = ?");
+        $stmt->execute([$bankId]);
 
         // Store session for 90 days (PSD2 allows TAN-free access within this window)
         $stmt = $this->pdo->prepare("
