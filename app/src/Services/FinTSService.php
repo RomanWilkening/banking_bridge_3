@@ -160,7 +160,31 @@ class FinTSService
      */
     private function selectTanMode(): void
     {
-        $tanModes = $this->finTs->getTanModes();
+        try {
+            $tanModes = $this->finTs->getTanModes();
+        } catch (UnsupportedException $e) {
+            // This branch should normally NOT trigger, because we ship a local
+            // patch for nemiah/phpFinTS#554 in app/patches/Fhp/Protocol/BPD.php
+            // that teaches BPD::supportsPsd2() to accept HITANSv7 in addition
+            // to v6 (Consorsbank stopped sending v6 on 2026-04-25).
+            //
+            // If you still see this error, either the patch wasn't applied
+            // (Docker image not rebuilt after pulling the fix?) or the bank
+            // returns yet another HITANS version we don't handle. See
+            // app/patches/README.md for verification steps and the upstream
+            // ticket nemiah/phpFinTS#554.
+            if (strpos($e->getMessage(), 'does not support PSD2') !== false) {
+                throw new UnsupportedException(
+                    'Die Bank meldet im anonymen Dialog kein unterstütztes HITANS-Segment. '
+                    . 'Eigentlich sollte der lokale Patch (app/patches/Fhp/Protocol/BPD.php) '
+                    . 'für nemiah/phpFinTS#554 das abfangen -- bitte prüfen, ob das '
+                    . 'Docker-Image nach dem letzten Pull neu gebaut wurde, oder ob die '
+                    . 'Bank eine HITANS-Version zurückgibt, die der Patch noch nicht abdeckt.'
+                );
+            }
+            throw $e;
+        }
+
         if (empty($tanModes)) {
             $this->logger->warning('No TAN modes available');
             return;
@@ -197,6 +221,48 @@ class FinTSService
     }
 
     /**
+     * Detect whether a thrown error indicates the persisted FinTS session is stale
+     * and should be discarded in favour of a fresh connection (which will re-fetch
+     * BPD and re-run selectTanMode()).
+     *
+     * Covers:
+     * - Generic dialog/session expiration errors
+     * - FinTS server errors that typically occur when the bank's TAN/PSD2 setup
+     *   has changed since the session was persisted, e.g. Consorsbank rejecting
+     *   `HKTAN:5:6+4+HKIDN` with `9010 Geschäftsvorfall wird nicht unterstützt`
+     *   and the surrounding `9050 Nachricht teilweise fehlerhaft`. These FinTS
+     *   return-code texts are part of the FinTS standard (not Consorsbank
+     *   specific), so the same heuristic works for any German bank exposing
+     *   those codes via phpFinTS.
+     */
+    private function isStaleSessionError(string $errorMessage): bool
+    {
+        $needles = [
+            // Generic session/dialog problems
+            'Dialogkontext',
+            'Dialog',
+            'session',
+            'Need to login',
+            // Bank rejected our TAN/HKTAN configuration -- persisted TAN mode
+            // is no longer valid, a fresh BPD + selectTanMode() is required.
+            // These are the standard FinTS return-code texts that the phpFinTS
+            // library always emits together with the numeric codes 9010 / 9050,
+            // so matching the texts is both sufficient and safer than matching
+            // the bare numbers (which could collide with amounts/timestamps).
+            'HKTAN',
+            'Geschäftsvorfall wird nicht unterstützt',
+            'Nachricht teilweise fehlerhaft',
+        ];
+
+        foreach ($needles as $needle) {
+            if (strpos($errorMessage, $needle) !== false) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
      * Get available SEPA accounts
      */
     public function getAccounts(array $bankConfig, ?string $persistedInstance = null): array
@@ -206,11 +272,7 @@ class FinTSService
         } catch (Exception $e) {
             // If session-related error and we had a persisted instance, retry with fresh session
             $errorMessage = $e->getMessage();
-            if ($persistedInstance && (
-                strpos($errorMessage, 'Dialogkontext') !== false ||
-                strpos($errorMessage, 'Dialog') !== false ||
-                strpos($errorMessage, 'session') !== false
-            )) {
+            if ($persistedInstance && $this->isStaleSessionError($errorMessage)) {
                 $this->logger->info('Session expired, starting fresh connection');
                 try {
                     return $this->doGetAccounts($bankConfig, null);
@@ -421,12 +483,7 @@ class FinTSService
             $this->logger->error('fetchAccountBalances failed', ['error' => $errorMessage]);
             
             // If session-related error and we had a persisted instance, retry with fresh session
-            if ($persistedInstance !== null && (
-                strpos($errorMessage, 'Dialogkontext') !== false ||
-                strpos($errorMessage, 'Dialog') !== false ||
-                strpos($errorMessage, 'session') !== false ||
-                strpos($errorMessage, 'Need to login') !== false
-            )) {
+            if ($persistedInstance !== null && $this->isStaleSessionError($errorMessage)) {
                 $this->logger->info('Session appears expired, retrying with fresh connection');
                 return $this->fetchAccountBalances($bankConfig, null);
             }
@@ -673,12 +730,7 @@ class FinTSService
             $this->logger->error('syncAll failed', ['error' => $errorMessage]);
             
             // If session-related error and we had a persisted instance, retry with fresh session
-            if ($persistedInstance !== null && (
-                strpos($errorMessage, 'Dialogkontext') !== false ||
-                strpos($errorMessage, 'Dialog') !== false ||
-                strpos($errorMessage, 'session') !== false ||
-                strpos($errorMessage, 'Need to login') !== false
-            )) {
+            if ($persistedInstance !== null && $this->isStaleSessionError($errorMessage)) {
                 $this->logger->info('Session appears expired, retrying with fresh connection');
                 return $this->syncAll($bankConfig, $accountsFromDb, null);
             }
@@ -2414,12 +2466,7 @@ class FinTSService
             $this->logger->error('Sync failed', ['error' => $errorMessage, 'trace' => $e->getTraceAsString()]);
             
             // If session-related error and we had a persisted instance, retry with fresh session
-            if ($persistedInstance !== null && (
-                strpos($errorMessage, 'Dialogkontext') !== false ||
-                strpos($errorMessage, 'Dialog') !== false ||
-                strpos($errorMessage, 'session') !== false ||
-                strpos($errorMessage, 'Need to login') !== false
-            )) {
+            if ($persistedInstance !== null && $this->isStaleSessionError($errorMessage)) {
                 $this->logger->info('Session appears expired, retrying with fresh connection');
                 return $this->syncAccountTransactions($bankConfig, $accountIdentifier, $from, $to, null);
             }
@@ -2550,12 +2597,7 @@ class FinTSService
             ]);
             
             // If session-related error and we had a persisted instance, retry with fresh session
-            if ($persistedInstance !== null && (
-                strpos($errorMessage, 'Dialogkontext') !== false ||
-                strpos($errorMessage, 'Dialog') !== false ||
-                strpos($errorMessage, 'session') !== false ||
-                strpos($errorMessage, 'Need to login') !== false
-            )) {
+            if ($persistedInstance !== null && $this->isStaleSessionError($errorMessage)) {
                 $this->logger->info('Session appears expired, retrying with fresh connection');
                 return $this->getDepotHoldings($bankConfig, $accountIdentifier, null);
             }
@@ -2788,9 +2830,23 @@ class FinTSService
 
         } catch (Exception $e) {
             $this->logger->error('Failed to fetch BPD', ['error' => $e->getMessage()]);
+
+            // Defensive: if the BPD::supportsPsd2() patch (app/patches/Fhp/Protocol/BPD.php
+            // for nemiah/phpFinTS#554) wasn't applied -- e.g. Docker image
+            // wasn't rebuilt after pulling the fix -- the user would see the
+            // raw "The bank does not support PSD2." message here. Translate it
+            // into something actionable.
+            $message = $e->getMessage();
+            if (strpos($message, 'does not support PSD2') !== false) {
+                $message = 'Die Bank meldet im anonymen Dialog kein HITANSv6/v7-Segment. '
+                    . 'Bitte prüfen, ob der lokale Patch (app/patches/Fhp/Protocol/BPD.php, '
+                    . 'siehe app/patches/README.md, Upstream nemiah/phpFinTS#554) im '
+                    . 'aktuellen Docker-Image angewendet wurde.';
+            }
+
             return [
                 'success' => false,
-                'message' => 'Fehler beim Abrufen der Bankparameter: ' . $e->getMessage()
+                'message' => 'Fehler beim Abrufen der Bankparameter: ' . $message
             ];
         }
     }
