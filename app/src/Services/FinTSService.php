@@ -7,6 +7,7 @@ use Fhp\FinTs;
 use Fhp\Options\FinTsOptions;
 use Fhp\Options\Credentials;
 use Fhp\Model\SEPAAccount;
+use Fhp\Model\NoPsd2TanMode;
 use Fhp\Action\GetSEPAAccounts;
 use Fhp\Action\GetBalance;
 use Fhp\Action\GetStatementOfAccount;
@@ -160,7 +161,30 @@ class FinTSService
      */
     private function selectTanMode(): void
     {
-        $tanModes = $this->finTs->getTanModes();
+        try {
+            $tanModes = $this->finTs->getTanModes();
+        } catch (UnsupportedException $e) {
+            // Some banks (e.g. Consorsbank, especially after a TAN-method change
+            // on the bank's web UI) return an anonymous BPD that does not advertise
+            // PSD2 support, even though the authenticated dialog does. In that
+            // case `phpFinTS` throws "The bank does not support PSD2." here.
+            //
+            // The phpFinTS docs explicitly recommend the workaround used below:
+            // pre-select NoPsd2TanMode::ID so that ensureBpdAvailable() skips the
+            // anonymous dialog entirely; the BPD is then loaded as part of the
+            // authenticated login. Read-only operations and operations covered
+            // by the persisted kundensystemId (PSD2 90-day window) keep working.
+            if (strpos($e->getMessage(), 'does not support PSD2') !== false) {
+                $this->logger->warning(
+                    'Anonymous BPD reports no PSD2 support; falling back to NoPsd2TanMode '
+                    . 'so the BPD can be loaded via the authenticated login (phpFinTS workaround).'
+                );
+                $this->finTs->selectTanMode(NoPsd2TanMode::ID);
+                return;
+            }
+            throw $e;
+        }
+
         if (empty($tanModes)) {
             $this->logger->warning('No TAN modes available');
             return;
@@ -2806,9 +2830,24 @@ class FinTSService
 
         } catch (Exception $e) {
             $this->logger->error('Failed to fetch BPD', ['error' => $e->getMessage()]);
+
+            // The anonymous BPD endpoint of some banks (e.g. Consorsbank, often
+            // after a TAN-method change) lies about PSD2 support. The real
+            // (authenticated) BPD is fine, but we cannot fetch it here without
+            // credentials. Translate the technical message into a clear hint so
+            // the frontend doesn't display the misleading "bank does not support
+            // PSD2" notice -- the bank does, just not over the anonymous dialog.
+            $message = $e->getMessage();
+            if (strpos($message, 'does not support PSD2') !== false) {
+                $message = 'Die anonyme Bankparameter-Abfrage liefert aktuell keine PSD2-Daten '
+                    . '(häufig nach Änderung des TAN-Verfahrens). Beim regulären Sync wird '
+                    . 'automatisch der NoPsd2TanMode-Workaround verwendet -- die Live-Abfrage '
+                    . 'der Bank-Capabilities ist davon unabhängig nicht möglich.';
+            }
+
             return [
                 'success' => false,
-                'message' => 'Fehler beim Abrufen der Bankparameter: ' . $e->getMessage()
+                'message' => 'Fehler beim Abrufen der Bankparameter: ' . $message
             ];
         }
     }
