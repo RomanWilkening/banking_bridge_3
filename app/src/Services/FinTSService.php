@@ -163,27 +163,23 @@ class FinTSService
         try {
             $tanModes = $this->finTs->getTanModes();
         } catch (UnsupportedException $e) {
-            // Known upstream bug: when the bank returns a HITANS version that
-            // phpFinTS does not parse (e.g. Consorsbank since 2026-04-25), the
-            // anonymous BPD ends up without any HKTAN segment, so
-            // BPD::supportsPsd2() returns false and Fhp\FinTs::readBPD() throws
-            // "The bank does not support PSD2." -- even though the bank DOES
-            // support PSD2. Tracked upstream as nemiah/phpFinTS#554.
+            // This branch should normally NOT trigger, because we ship a local
+            // patch for nemiah/phpFinTS#554 in app/patches/Fhp/Protocol/BPD.php
+            // that teaches BPD::supportsPsd2() to accept HITANSv7 in addition
+            // to v6 (Consorsbank stopped sending v6 on 2026-04-25).
             //
-            // Pre-selecting NoPsd2TanMode here would silence the error but
-            // immediately fail later with "No UPD received", because the bank
-            // really does require strong authentication. There is no usable
-            // client-side workaround until the phpFinTS fix lands; rewrite the
-            // message so the user sees the actual cause instead of a misleading
-            // "Bank unterstützt kein PSD2".
+            // If you still see this error, either the patch wasn't applied
+            // (Docker image not rebuilt after pulling the fix?) or the bank
+            // returns yet another HITANS version we don't handle. See
+            // app/patches/README.md for verification steps and the upstream
+            // ticket nemiah/phpFinTS#554.
             if (strpos($e->getMessage(), 'does not support PSD2') !== false) {
                 throw new UnsupportedException(
-                    'Die Bank gibt im anonymen Dialog ein HITANS-Segment zurück, '
-                    . 'das die phpFinTS-Bibliothek (noch) nicht parst -- meist die '
-                    . 'Folge einer TAN-Verfahrens-Umstellung auf Bankseite. Das ist '
-                    . 'ein bekannter Upstream-Bug (nemiah/phpFinTS#554) und muss '
-                    . 'dort behoben werden; ein "Sessions wipen"-Knopf hilft nicht, '
-                    . 'da der Fehler schon vor jeder TAN-Auswahl auftritt.'
+                    'Die Bank meldet im anonymen Dialog kein unterstütztes HITANS-Segment. '
+                    . 'Eigentlich sollte der lokale Patch (app/patches/Fhp/Protocol/BPD.php) '
+                    . 'für nemiah/phpFinTS#554 das abfangen -- bitte prüfen, ob das '
+                    . 'Docker-Image nach dem letzten Pull neu gebaut wurde, oder ob die '
+                    . 'Bank eine HITANS-Version zurückgibt, die der Patch noch nicht abdeckt.'
                 );
             }
             throw $e;
@@ -2835,19 +2831,17 @@ class FinTSService
         } catch (Exception $e) {
             $this->logger->error('Failed to fetch BPD', ['error' => $e->getMessage()]);
 
-            // The anonymous BPD endpoint of some banks (e.g. Consorsbank, often
-            // after a TAN-method change) lies about PSD2 support. The real
-            // (authenticated) BPD is fine, but we cannot fetch it here without
-            // credentials. Translate the technical message into a clear hint so
-            // the frontend doesn't display the misleading "bank does not support
-            // PSD2" notice -- the bank does, just not over the anonymous dialog.
+            // Defensive: if the BPD::supportsPsd2() patch (app/patches/Fhp/Protocol/BPD.php
+            // for nemiah/phpFinTS#554) wasn't applied -- e.g. Docker image
+            // wasn't rebuilt after pulling the fix -- the user would see the
+            // raw "The bank does not support PSD2." message here. Translate it
+            // into something actionable.
             $message = $e->getMessage();
             if (strpos($message, 'does not support PSD2') !== false) {
-                $message = 'Die Bank gibt im anonymen Dialog ein HITANS-Segment zurück, '
-                    . 'das die phpFinTS-Bibliothek (noch) nicht parst (bekannter Upstream-Bug '
-                    . 'nemiah/phpFinTS#554, häufig nach Änderung des TAN-Verfahrens auf Bankseite). '
-                    . 'Die Bank-Capabilities lassen sich aktuell nicht abrufen, bis der Upstream-Fix '
-                    . 'verfügbar ist.';
+                $message = 'Die Bank meldet im anonymen Dialog kein HITANSv6/v7-Segment. '
+                    . 'Bitte prüfen, ob der lokale Patch (app/patches/Fhp/Protocol/BPD.php, '
+                    . 'siehe app/patches/README.md, Upstream nemiah/phpFinTS#554) im '
+                    . 'aktuellen Docker-Image angewendet wurde.';
             }
 
             return [
