@@ -7,7 +7,6 @@ use Fhp\FinTs;
 use Fhp\Options\FinTsOptions;
 use Fhp\Options\Credentials;
 use Fhp\Model\SEPAAccount;
-use Fhp\Model\NoPsd2TanMode;
 use Fhp\Action\GetSEPAAccounts;
 use Fhp\Action\GetBalance;
 use Fhp\Action\GetStatementOfAccount;
@@ -164,23 +163,28 @@ class FinTSService
         try {
             $tanModes = $this->finTs->getTanModes();
         } catch (UnsupportedException $e) {
-            // Some banks (e.g. Consorsbank, especially after a TAN-method change
-            // on the bank's web UI) return an anonymous BPD that does not advertise
-            // PSD2 support, even though the authenticated dialog does. In that
-            // case `phpFinTS` throws "The bank does not support PSD2." here.
+            // Known upstream bug: when the bank returns a HITANS version that
+            // phpFinTS does not parse (e.g. Consorsbank since 2026-04-25), the
+            // anonymous BPD ends up without any HKTAN segment, so
+            // BPD::supportsPsd2() returns false and Fhp\FinTs::readBPD() throws
+            // "The bank does not support PSD2." -- even though the bank DOES
+            // support PSD2. Tracked upstream as nemiah/phpFinTS#554.
             //
-            // The phpFinTS docs explicitly recommend the workaround used below:
-            // pre-select NoPsd2TanMode::ID so that ensureBpdAvailable() skips the
-            // anonymous dialog entirely; the BPD is then loaded as part of the
-            // authenticated login. Read-only operations and operations covered
-            // by the persisted kundensystemId (PSD2 90-day window) keep working.
+            // Pre-selecting NoPsd2TanMode here would silence the error but
+            // immediately fail later with "No UPD received", because the bank
+            // really does require strong authentication. There is no usable
+            // client-side workaround until the phpFinTS fix lands; rewrite the
+            // message so the user sees the actual cause instead of a misleading
+            // "Bank unterstützt kein PSD2".
             if (strpos($e->getMessage(), 'does not support PSD2') !== false) {
-                $this->logger->warning(
-                    'Anonymous BPD reports no PSD2 support; falling back to NoPsd2TanMode '
-                    . 'so the BPD can be loaded via the authenticated login (phpFinTS workaround).'
+                throw new UnsupportedException(
+                    'Die Bank gibt im anonymen Dialog ein HITANS-Segment zurück, '
+                    . 'das die phpFinTS-Bibliothek (noch) nicht parst -- meist die '
+                    . 'Folge einer TAN-Verfahrens-Umstellung auf Bankseite. Das ist '
+                    . 'ein bekannter Upstream-Bug (nemiah/phpFinTS#554) und muss '
+                    . 'dort behoben werden; ein "Sessions wipen"-Knopf hilft nicht, '
+                    . 'da der Fehler schon vor jeder TAN-Auswahl auftritt.'
                 );
-                $this->finTs->selectTanMode(NoPsd2TanMode::ID);
-                return;
             }
             throw $e;
         }
@@ -2839,10 +2843,11 @@ class FinTSService
             // PSD2" notice -- the bank does, just not over the anonymous dialog.
             $message = $e->getMessage();
             if (strpos($message, 'does not support PSD2') !== false) {
-                $message = 'Die anonyme Bankparameter-Abfrage liefert aktuell keine PSD2-Daten '
-                    . '(häufig nach Änderung des TAN-Verfahrens). Beim regulären Sync wird '
-                    . 'automatisch der NoPsd2TanMode-Workaround verwendet -- die Live-Abfrage '
-                    . 'der Bank-Capabilities ist davon unabhängig nicht möglich.';
+                $message = 'Die Bank gibt im anonymen Dialog ein HITANS-Segment zurück, '
+                    . 'das die phpFinTS-Bibliothek (noch) nicht parst (bekannter Upstream-Bug '
+                    . 'nemiah/phpFinTS#554, häufig nach Änderung des TAN-Verfahrens auf Bankseite). '
+                    . 'Die Bank-Capabilities lassen sich aktuell nicht abrufen, bis der Upstream-Fix '
+                    . 'verfügbar ist.';
             }
 
             return [
