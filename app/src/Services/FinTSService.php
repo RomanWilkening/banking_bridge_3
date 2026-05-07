@@ -197,6 +197,48 @@ class FinTSService
     }
 
     /**
+     * Detect whether a thrown error indicates the persisted FinTS session is stale
+     * and should be discarded in favour of a fresh connection (which will re-fetch
+     * BPD and re-run selectTanMode()).
+     *
+     * Covers:
+     * - Generic dialog/session expiration errors
+     * - FinTS server errors that typically occur when the bank's TAN/PSD2 setup
+     *   has changed since the session was persisted, e.g. Consorsbank rejecting
+     *   `HKTAN:5:6+4+HKIDN` with `9010 Geschäftsvorfall wird nicht unterstützt`
+     *   and the surrounding `9050 Nachricht teilweise fehlerhaft`. These FinTS
+     *   return-code texts are part of the FinTS standard (not Consorsbank
+     *   specific), so the same heuristic works for any German bank exposing
+     *   those codes via phpFinTS.
+     */
+    private function isStaleSessionError(string $errorMessage): bool
+    {
+        $needles = [
+            // Generic session/dialog problems
+            'Dialogkontext',
+            'Dialog',
+            'session',
+            'Need to login',
+            // Bank rejected our TAN/HKTAN configuration -- persisted TAN mode
+            // is no longer valid, a fresh BPD + selectTanMode() is required.
+            // These are the standard FinTS return-code texts that the phpFinTS
+            // library always emits together with the numeric codes 9010 / 9050,
+            // so matching the texts is both sufficient and safer than matching
+            // the bare numbers (which could collide with amounts/timestamps).
+            'HKTAN',
+            'Geschäftsvorfall wird nicht unterstützt',
+            'Nachricht teilweise fehlerhaft',
+        ];
+
+        foreach ($needles as $needle) {
+            if (strpos($errorMessage, $needle) !== false) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
      * Get available SEPA accounts
      */
     public function getAccounts(array $bankConfig, ?string $persistedInstance = null): array
@@ -206,11 +248,7 @@ class FinTSService
         } catch (Exception $e) {
             // If session-related error and we had a persisted instance, retry with fresh session
             $errorMessage = $e->getMessage();
-            if ($persistedInstance && (
-                strpos($errorMessage, 'Dialogkontext') !== false ||
-                strpos($errorMessage, 'Dialog') !== false ||
-                strpos($errorMessage, 'session') !== false
-            )) {
+            if ($persistedInstance && $this->isStaleSessionError($errorMessage)) {
                 $this->logger->info('Session expired, starting fresh connection');
                 try {
                     return $this->doGetAccounts($bankConfig, null);
@@ -421,12 +459,7 @@ class FinTSService
             $this->logger->error('fetchAccountBalances failed', ['error' => $errorMessage]);
             
             // If session-related error and we had a persisted instance, retry with fresh session
-            if ($persistedInstance !== null && (
-                strpos($errorMessage, 'Dialogkontext') !== false ||
-                strpos($errorMessage, 'Dialog') !== false ||
-                strpos($errorMessage, 'session') !== false ||
-                strpos($errorMessage, 'Need to login') !== false
-            )) {
+            if ($persistedInstance !== null && $this->isStaleSessionError($errorMessage)) {
                 $this->logger->info('Session appears expired, retrying with fresh connection');
                 return $this->fetchAccountBalances($bankConfig, null);
             }
@@ -673,12 +706,7 @@ class FinTSService
             $this->logger->error('syncAll failed', ['error' => $errorMessage]);
             
             // If session-related error and we had a persisted instance, retry with fresh session
-            if ($persistedInstance !== null && (
-                strpos($errorMessage, 'Dialogkontext') !== false ||
-                strpos($errorMessage, 'Dialog') !== false ||
-                strpos($errorMessage, 'session') !== false ||
-                strpos($errorMessage, 'Need to login') !== false
-            )) {
+            if ($persistedInstance !== null && $this->isStaleSessionError($errorMessage)) {
                 $this->logger->info('Session appears expired, retrying with fresh connection');
                 return $this->syncAll($bankConfig, $accountsFromDb, null);
             }
@@ -2414,12 +2442,7 @@ class FinTSService
             $this->logger->error('Sync failed', ['error' => $errorMessage, 'trace' => $e->getTraceAsString()]);
             
             // If session-related error and we had a persisted instance, retry with fresh session
-            if ($persistedInstance !== null && (
-                strpos($errorMessage, 'Dialogkontext') !== false ||
-                strpos($errorMessage, 'Dialog') !== false ||
-                strpos($errorMessage, 'session') !== false ||
-                strpos($errorMessage, 'Need to login') !== false
-            )) {
+            if ($persistedInstance !== null && $this->isStaleSessionError($errorMessage)) {
                 $this->logger->info('Session appears expired, retrying with fresh connection');
                 return $this->syncAccountTransactions($bankConfig, $accountIdentifier, $from, $to, null);
             }
@@ -2550,12 +2573,7 @@ class FinTSService
             ]);
             
             // If session-related error and we had a persisted instance, retry with fresh session
-            if ($persistedInstance !== null && (
-                strpos($errorMessage, 'Dialogkontext') !== false ||
-                strpos($errorMessage, 'Dialog') !== false ||
-                strpos($errorMessage, 'session') !== false ||
-                strpos($errorMessage, 'Need to login') !== false
-            )) {
+            if ($persistedInstance !== null && $this->isStaleSessionError($errorMessage)) {
                 $this->logger->info('Session appears expired, retrying with fresh connection');
                 return $this->getDepotHoldings($bankConfig, $accountIdentifier, null);
             }
