@@ -27,6 +27,9 @@ return function (App $app) {
     $app->get('/paypal/{id}', [PayPalController::class, 'show'])->setName('paypal.show');
     $app->post('/paypal/{id}/delete', [PayPalController::class, 'delete'])->setName('paypal.delete');
     
+    // Cross-source Transaction Search
+    $app->get('/transactions', [\App\Controllers\TransactionSearchController::class, 'index'])->setName('transactions.search');
+
     // Settings Routes
     $app->get('/settings', [\App\Controllers\SettingsController::class, 'index'])->setName('settings');
     $app->post('/settings', [\App\Controllers\SettingsController::class, 'save'])->setName('settings.save');
