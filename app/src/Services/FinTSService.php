@@ -504,20 +504,36 @@ class FinTSService
      * @param array $bankConfig Bank configuration
      * @param array $accountsFromDb Accounts to sync
      * @param string|null $persistedInstance Persisted FinTS session (preserves kundensystemId for TAN-free access)
+     * @param array<int, \DateTime>|null $perAccountFrom Optional map of account id => start date for the
+     *        transaction window. Accounts not listed fall back to the default last-30-days window.
+     *        Used by the auto-sync to catch up after outages.
      */
-    public function syncAll(array $bankConfig, array $accountsFromDb, ?string $persistedInstance = null): array
+    public function syncAll(array $bankConfig, array $accountsFromDb, ?string $persistedInstance = null, ?array $perAccountFrom = null): array
     {
         $this->logger->info('=== syncAll START ===', [
             'accounts_count' => count($accountsFromDb),
-            'has_persisted_instance' => $persistedInstance !== null
+            'has_persisted_instance' => $persistedInstance !== null,
+            'has_per_account_from' => $perAccountFrom !== null
         ]);
-        
+
         $results = [
             'balances' => [],
             'transactions' => [],
             'holdings' => [],
-            'errors' => []
+            'errors' => [],
+            // Per-account status flags so callers can distinguish
+            // "0 new transactions" from "transactions could not be fetched"
+            'transactions_status' => [], // accountId => 'success'|'needs_tan'|'failed'|'skipped'
+            'holdings_status' => [],     // accountId => 'success'|'needs_tan'|'failed' (depots are processed before transactions, so 'skipped' does not occur here)
+            // Per-account error messages (only when status != 'success')
+            'transactions_errors' => [], // accountId => string
+            'holdings_errors' => []      // accountId => string
         ];
+
+        // After a TAN is required for one account's transactions, the FinTS
+        // session is in a TAN-pending state and we cannot run further actions
+        // in this run. We mark the remaining accounts as "skipped".
+        $transactionsBlockedByTan = false;
         
         try {
             $options = $this->createOptions($bankConfig);
@@ -660,18 +676,24 @@ class FinTSService
                         $holdingsResult = $this->fetchDepotHoldingsInternal($sepaAccount);
                         if ($holdingsResult['success']) {
                             $results['holdings'][$accountId] = $holdingsResult['holdings'];
+                            $results['holdings_status'][$accountId] = 'success';
                             $this->logger->info('Got depot holdings', [
                                 'account_id' => $accountId,
                                 'count' => count($holdingsResult['holdings'])
                             ]);
                         } else {
-                            $results['errors'][] = "Depot {$accountId}: " . ($holdingsResult['message'] ?? 'Unbekannter Fehler');
+                            $errMsg = $holdingsResult['message'] ?? 'Unbekannter Fehler';
+                            $results['holdings_status'][$accountId] = !empty($holdingsResult['needs_tan']) ? 'needs_tan' : 'failed';
+                            $results['holdings_errors'][$accountId] = $errMsg;
+                            $results['errors'][] = "Depot {$accountId}: " . $errMsg;
                         }
                     } catch (\Throwable $e) {
                         $this->logger->warning('Failed to fetch depot holdings', [
                             'account_id' => $accountId,
                             'error' => $e->getMessage()
                         ]);
+                        $results['holdings_status'][$accountId] = 'failed';
+                        $results['holdings_errors'][$accountId] = $e->getMessage();
                         $results['errors'][] = "Depot {$accountId}: " . $e->getMessage();
                     }
                 } else {
@@ -692,28 +714,62 @@ class FinTSService
                             'error' => $e->getMessage()
                         ]);
                     }
-                    
-                    // Fetch transactions (last 30 days)
-                    $this->logger->info('Fetching transactions', ['account_id' => $accountId]);
+
+                    // Skip transaction fetching if a previous account in this
+                    // run already triggered a TAN requirement - the session is
+                    // TAN-pending and further calls would fail anyway.
+                    if ($transactionsBlockedByTan) {
+                        $this->logger->info('Skipping transactions - session is TAN-pending from previous account', [
+                            'account_id' => $accountId
+                        ]);
+                        $results['transactions_status'][$accountId] = 'skipped';
+                        continue;
+                    }
+
+                    // Fetch transactions - either from a per-account "from" date
+                    // (catch-up) or default to last 30 days.
                     try {
-                        $from = new \DateTime('-30 days');
+                        if ($perAccountFrom !== null && isset($perAccountFrom[$accountId])) {
+                            $from = $perAccountFrom[$accountId];
+                        } else {
+                            $from = new \DateTime('-30 days');
+                        }
                         $to = new \DateTime();
-                        
+                        $this->logger->info('Fetching transactions', [
+                            'account_id' => $accountId,
+                            'from' => $from->format('Y-m-d'),
+                            'to' => $to->format('Y-m-d')
+                        ]);
+
                         $txResult = $this->fetchTransactionsInternal($sepaAccount, $from, $to);
-                        if ($txResult['success']) {
+                        if (!empty($txResult['needs_tan'])) {
+                            $results['transactions_status'][$accountId] = 'needs_tan';
+                            $results['transactions_errors'][$accountId] = $txResult['message'] ?? 'TAN erforderlich';
+                            $transactionsBlockedByTan = true;
+                            $results['errors'][] = "Transaktionen {$accountId}: TAN erforderlich";
+                            $this->logger->warning('Transactions need TAN, blocking further transaction fetches in this run', [
+                                'account_id' => $accountId
+                            ]);
+                        } elseif ($txResult['success']) {
                             $results['transactions'][$accountId] = $txResult['transactions'];
+                            $results['transactions_status'][$accountId] = 'success';
                             $this->logger->info('Got transactions', [
                                 'account_id' => $accountId,
                                 'count' => count($txResult['transactions'])
                             ]);
                         } else {
-                            $results['errors'][] = "Transaktionen {$accountId}: " . ($txResult['message'] ?? 'Unbekannter Fehler');
+                            $errMsg = $txResult['message'] ?? 'Unbekannter Fehler';
+                            $results['transactions_status'][$accountId] = 'failed';
+                            $results['transactions_errors'][$accountId] = $errMsg;
+                            $results['errors'][] = "Transaktionen {$accountId}: " . $errMsg;
                         }
                     } catch (\Throwable $e) {
                         $this->logger->warning('Failed to fetch transactions', [
                             'account_id' => $accountId,
                             'error' => $e->getMessage()
                         ]);
+                        $results['transactions_status'][$accountId] = 'failed';
+                        $results['transactions_errors'][$accountId] = $e->getMessage();
                         $results['errors'][] = "Transaktionen {$accountId}: " . $e->getMessage();
                     }
                 }
@@ -777,40 +833,99 @@ class FinTSService
         }
 
         $errors = [];
-        
-        // Try MT940
+
+        // Track an MT940 success with empty raw payload so we can still accept
+        // it as a valid (= 0 new bookings) result when CAMT is unavailable or
+        // also fails. Without this, accounts with no movement in the requested
+        // window (e.g. dormant savings accounts) would be reported as errors
+        // even though MT940 technically succeeded. Matches the behavior of
+        // syncAccountTransactions().
+        $mt940EmptyResult = null;
+
+        // Try MT940 first
         if ($supportsMT940) {
             try {
                 $getStatement = GetStatementOfAccount::create($account, $from, $to);
                 $this->finTs->execute($getStatement);
 
-                if (!$getStatement->needsTan()) {
-                    $result = $this->processTransactionsResult($getStatement);
-                    if ($result['success'] && count($result['transactions'] ?? []) > 0) {
+                if ($getStatement->needsTan()) {
+                    // Surface TAN requirement instead of silently dropping it.
+                    // The session is now in a TAN-pending state and cannot be
+                    // reused for a CAMT fallback, so return immediately.
+                    $this->logger->info('MT940 transaction fetch requires TAN');
+                    return [
+                        'success' => false,
+                        'needs_tan' => true,
+                        'tan_request' => $this->extractTanRequest($getStatement),
+                        'persisted_action' => base64_encode(serialize($getStatement)),
+                        'persisted_instance' => $this->finTs->persist(),
+                        'message' => 'TAN erforderlich für Transaktionsabruf (MT940)'
+                    ];
+                }
+
+                $result = $this->processTransactionsResult($getStatement);
+                if ($result['success']) {
+                    // If MT940 returned a completely empty raw response (some
+                    // banks signal "use CAMT" this way), try CAMT as a
+                    // fallback - but remember the MT940 success so we can
+                    // fall back to it if CAMT is unavailable or also fails.
+                    if (empty($result['empty_raw_response'])) {
                         return $result;
                     }
+                    $mt940EmptyResult = $result;
+                    $errors['MT940'] = 'Leere MT940-Antwort';
+                } else {
+                    $errors['MT940'] = $result['message'] ?? 'MT940 lieferte kein Ergebnis';
                 }
             } catch (\Throwable $e) {
                 $errors['MT940'] = $e->getMessage();
             }
         }
 
-        // Try CAMT
+        // Try CAMT only as a fallback when MT940 is unsupported or errored
         if ($supportsCAMT) {
             try {
                 $result = $this->fetchTransactionsXML($account, $from, $to);
+                if (isset($result['needs_tan']) && $result['needs_tan']) {
+                    return $result;
+                }
                 if (isset($result['success']) && $result['success']) {
                     return $result;
                 }
+                $errors['CAMT'] = $result['message'] ?? 'CAMT lieferte kein Ergebnis';
             } catch (\Throwable $e) {
                 $errors['CAMT'] = $e->getMessage();
             }
         }
 
+        // CAMT was unavailable or failed - if we have an MT940 success with
+        // empty raw payload, accept it as "0 transactions" rather than
+        // reporting a spurious failure.
+        if ($mt940EmptyResult !== null) {
+            $this->logger->info('Accepting empty MT940 result (CAMT unavailable or failed)', [
+                'camt_supported' => $supportsCAMT,
+                'camt_error' => $errors['CAMT'] ?? null
+            ]);
+            return $mt940EmptyResult;
+        }
+
+        if (!$supportsMT940 && !$supportsCAMT) {
+            return [
+                'success' => false,
+                'message' => 'Bank unterstützt weder MT940 noch CAMT für Transaktionen'
+            ];
+        }
+
+        // Both attempts failed (or only one was available and failed) -
+        // return a real failure so callers can surface it instead of treating
+        // it as "0 transactions".
+        $errorParts = [];
+        foreach ($errors as $format => $message) {
+            $errorParts[] = $format . ': ' . $message;
+        }
         return [
-            'success' => true,
-            'transactions' => [],
-            'message' => 'Keine Transaktionen gefunden'
+            'success' => false,
+            'message' => 'Transaktionsabruf fehlgeschlagen (' . implode('; ', $errorParts) . ')'
         ];
     }
     
@@ -833,6 +948,7 @@ class FinTSService
             if ($getDepot->needsTan()) {
                 return [
                     'success' => false,
+                    'needs_tan' => true,
                     'message' => 'TAN erforderlich für Depot-Abfrage'
                 ];
             }
@@ -2162,6 +2278,7 @@ class FinTSService
             'transactions' => $transactions,
             'balance' => $balance,
             'balance_date' => $balanceDate,
+            'empty_raw_response' => $rawLength === 0,
             'persisted_instance' => $this->finTs->persist()
         ];
     }

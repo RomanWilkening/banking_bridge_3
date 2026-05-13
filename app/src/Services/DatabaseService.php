@@ -1575,4 +1575,237 @@ class DatabaseService
         $stmt->execute([$accountId, $from, $to]);
         return $stmt->fetchAll();
     }
+
+    /**
+     * Search transactions across all bank accounts and PayPal accounts.
+     *
+     * Supported filter keys:
+     *  - search: free-text search across counterparty name, description, IBAN/email, booking text, subject
+     *  - date_from / date_to: booking date range (inclusive, YYYY-MM-DD)
+     *  - amount_min / amount_max: amount range (inclusive)
+     *  - direction: 'in' (amount > 0), 'out' (amount < 0) or empty/'all'
+     *  - source: 'bank', 'paypal' or empty/'all'
+     *  - bank_id: restrict to a specific bank (implies source=bank)
+     *  - account_id: restrict to a specific bank account (implies source=bank)
+     *  - paypal_account_id: restrict to a specific PayPal account (implies source=paypal)
+     *
+     * Returns rows with normalized columns:
+     *   source_type, source_id, bank_id, bank_name, account_name, account_iban,
+     *   tx_id, date, amount, currency, counterparty, counterparty_iban,
+     *   description, booking_text
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public function searchAllTransactions(array $filters = [], int $limit = 50, int $offset = 0): array
+    {
+        [$sql, $params] = $this->buildAllTransactionsQuery($filters);
+        if ($sql === null) {
+            return [];
+        }
+        $sql .= " ORDER BY date DESC, tx_id DESC LIMIT ? OFFSET ?";
+        $params[] = $limit;
+        $params[] = $offset;
+
+        $stmt = $this->pdo->prepare($sql);
+        $stmt->execute($params);
+        return $stmt->fetchAll();
+    }
+
+    /**
+     * Count transactions matching the filters used by searchAllTransactions().
+     */
+    public function countAllTransactions(array $filters = []): int
+    {
+        [$sql, $params] = $this->buildAllTransactionsQuery($filters);
+        if ($sql === null) {
+            return 0;
+        }
+        $countSql = "SELECT COUNT(*) AS count FROM ({$sql}) AS combined";
+        $stmt = $this->pdo->prepare($countSql);
+        $stmt->execute($params);
+        $row = $stmt->fetch();
+        return (int) ($row['count'] ?? 0);
+    }
+
+    /**
+     * Build the UNION ALL query (without ORDER/LIMIT) used by
+     * searchAllTransactions() and countAllTransactions().
+     *
+     * Returns [sql, params] or [null, []] when the filters exclude all sources.
+     *
+     * @return array{0: ?string, 1: array}
+     */
+    private function buildAllTransactionsQuery(array $filters): array
+    {
+        $source = $filters['source'] ?? 'all';
+        $includeBank = in_array($source, ['all', 'bank'], true);
+        $includePaypal = in_array($source, ['all', 'paypal'], true);
+
+        // Specific id filters force a single source.
+        if (!empty($filters['bank_id']) || !empty($filters['account_id'])) {
+            $includeBank = true;
+            $includePaypal = false;
+        }
+        if (!empty($filters['paypal_account_id'])) {
+            $includeBank = false;
+            $includePaypal = true;
+        }
+
+        $parts = [];
+        $params = [];
+
+        if ($includeBank) {
+            [$bankSql, $bankParams] = $this->buildBankTransactionsSubquery($filters);
+            $parts[] = $bankSql;
+            $params = array_merge($params, $bankParams);
+        }
+        if ($includePaypal) {
+            [$ppSql, $ppParams] = $this->buildPaypalTransactionsSubquery($filters);
+            $parts[] = $ppSql;
+            $params = array_merge($params, $ppParams);
+        }
+
+        if (empty($parts)) {
+            return [null, []];
+        }
+
+        $sql = implode("\nUNION ALL\n", $parts);
+        return [$sql, $params];
+    }
+
+    /**
+     * @return array{0: string, 1: array}
+     */
+    private function buildBankTransactionsSubquery(array $filters): array
+    {
+        $conditions = ['1=1'];
+        $params = [];
+
+        if (!empty($filters['bank_id'])) {
+            $conditions[] = 'a.bank_id = ?';
+            $params[] = (int) $filters['bank_id'];
+        }
+        if (!empty($filters['account_id'])) {
+            $conditions[] = 't.account_id = ?';
+            $params[] = (int) $filters['account_id'];
+        }
+        if (!empty($filters['date_from'])) {
+            $conditions[] = 't.booking_date >= ?';
+            $params[] = $filters['date_from'];
+        }
+        if (!empty($filters['date_to'])) {
+            $conditions[] = 't.booking_date <= ?';
+            $params[] = $filters['date_to'];
+        }
+        if (isset($filters['amount_min']) && $filters['amount_min'] !== '') {
+            $conditions[] = 't.amount >= ?';
+            $params[] = (float) $filters['amount_min'];
+        }
+        if (isset($filters['amount_max']) && $filters['amount_max'] !== '') {
+            $conditions[] = 't.amount <= ?';
+            $params[] = (float) $filters['amount_max'];
+        }
+        if (!empty($filters['direction'])) {
+            if ($filters['direction'] === 'in') {
+                $conditions[] = 't.amount > 0';
+            } elseif ($filters['direction'] === 'out') {
+                $conditions[] = 't.amount < 0';
+            }
+        }
+        if (!empty($filters['search'])) {
+            $term = '%' . $this->escapeLike((string) $filters['search']) . '%';
+            $conditions[] = "(t.name LIKE ? ESCAPE '\\' OR t.description LIKE ? ESCAPE '\\' OR t.iban LIKE ? ESCAPE '\\' OR t.booking_text LIKE ? ESCAPE '\\' OR t.end_to_end_id LIKE ? ESCAPE '\\')";
+            $params = array_merge($params, [$term, $term, $term, $term, $term]);
+        }
+
+        $sql = "
+            SELECT 'bank' AS source_type,
+                   t.id AS tx_id,
+                   t.account_id AS source_id,
+                   a.bank_id AS bank_id,
+                   b.name AS bank_name,
+                   COALESCE(a.custom_name, a.account_name, a.account_number) AS account_name,
+                   a.iban AS account_iban,
+                   t.booking_date AS date,
+                   t.amount AS amount,
+                   t.currency AS currency,
+                   t.name AS counterparty,
+                   t.iban AS counterparty_iban,
+                   t.description AS description,
+                   t.booking_text AS booking_text
+            FROM transactions t
+            JOIN accounts a ON t.account_id = a.id
+            JOIN banks b ON a.bank_id = b.id
+            WHERE " . implode(' AND ', $conditions);
+
+        return [$sql, $params];
+    }
+
+    /**
+     * @return array{0: string, 1: array}
+     */
+    private function buildPaypalTransactionsSubquery(array $filters): array
+    {
+        $conditions = ['1=1'];
+        $params = [];
+
+        if (!empty($filters['paypal_account_id'])) {
+            $conditions[] = 'p.paypal_account_id = ?';
+            $params[] = (int) $filters['paypal_account_id'];
+        }
+        if (!empty($filters['date_from'])) {
+            $conditions[] = 'DATE(p.timestamp) >= ?';
+            $params[] = $filters['date_from'];
+        }
+        if (!empty($filters['date_to'])) {
+            $conditions[] = 'DATE(p.timestamp) <= ?';
+            $params[] = $filters['date_to'];
+        }
+        if (isset($filters['amount_min']) && $filters['amount_min'] !== '') {
+            $conditions[] = 'p.amount >= ?';
+            $params[] = (float) $filters['amount_min'];
+        }
+        if (isset($filters['amount_max']) && $filters['amount_max'] !== '') {
+            $conditions[] = 'p.amount <= ?';
+            $params[] = (float) $filters['amount_max'];
+        }
+        if (!empty($filters['direction'])) {
+            if ($filters['direction'] === 'in') {
+                $conditions[] = 'p.amount > 0';
+            } elseif ($filters['direction'] === 'out') {
+                $conditions[] = 'p.amount < 0';
+            }
+        }
+        if (!empty($filters['search'])) {
+            $term = '%' . $this->escapeLike((string) $filters['search']) . '%';
+            $conditions[] = "(p.name LIKE ? ESCAPE '\\' OR p.subject LIKE ? ESCAPE '\\' OR p.email LIKE ? ESCAPE '\\' OR p.type LIKE ? ESCAPE '\\' OR p.transaction_id LIKE ? ESCAPE '\\')";
+            $params = array_merge($params, [$term, $term, $term, $term, $term]);
+        }
+
+        $sql = "
+            SELECT 'paypal' AS source_type,
+                   p.id AS tx_id,
+                   p.paypal_account_id AS source_id,
+                   NULL AS bank_id,
+                   'PayPal' AS bank_name,
+                   pa.name AS account_name,
+                   pa.email AS account_iban,
+                   DATE(p.timestamp) AS date,
+                   p.amount AS amount,
+                   p.currency AS currency,
+                   p.name AS counterparty,
+                   p.email AS counterparty_iban,
+                   p.subject AS description,
+                   p.type AS booking_text
+            FROM paypal_transactions p
+            JOIN paypal_accounts pa ON p.paypal_account_id = pa.id
+            WHERE " . implode(' AND ', $conditions);
+
+        return [$sql, $params];
+    }
+
+    private function escapeLike(string $value): string
+    {
+        return str_replace(['\\', '%', '_'], ['\\\\', '\\%', '\\_'], $value);
+    }
 }

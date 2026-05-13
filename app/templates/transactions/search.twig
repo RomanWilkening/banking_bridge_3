@@ -1,0 +1,248 @@
+{% extends "layout.twig" %}
+
+{% block content %}
+{% set filter_query = '' %}
+{% for key, value in filters %}
+{% set filter_query = filter_query ~ '&' ~ key ~ '=' ~ value|url_encode %}
+{% endfor %}
+<div class="space-y-6">
+    <!-- Header -->
+    <div class="bg-white shadow rounded-lg overflow-hidden">
+        <div class="px-4 py-5 sm:px-6 border-b border-gray-200">
+            <h2 class="text-lg font-medium text-gray-900">Transaktionssuche</h2>
+            <p class="text-sm text-gray-500">Konten- und PayPal-übergreifend nach Buchungen suchen.</p>
+        </div>
+
+        <!-- Filter Form -->
+        <div class="px-4 py-4 bg-gray-50">
+            <form method="get" action="" class="space-y-4">
+                <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                    <!-- Search text -->
+                    <div class="sm:col-span-2 lg:col-span-4">
+                        <label for="filter-search" class="block text-xs font-medium text-gray-500 mb-1">Suchbegriff</label>
+                        <input type="text" id="filter-search" name="search" value="{{ filters.search ?? '' }}"
+                               placeholder="Name, IBAN, Verwendungszweck, E-Mail, Buchungstext..."
+                               class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 text-sm border px-3 py-1.5">
+                    </div>
+                    <!-- Date From -->
+                    <div>
+                        <label for="filter-date-from" class="block text-xs font-medium text-gray-500 mb-1">Datum von</label>
+                        <input type="date" id="filter-date-from" name="date_from" value="{{ filters.date_from ?? '' }}"
+                               class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 text-sm border px-3 py-1.5">
+                    </div>
+                    <!-- Date To -->
+                    <div>
+                        <label for="filter-date-to" class="block text-xs font-medium text-gray-500 mb-1">Datum bis</label>
+                        <input type="date" id="filter-date-to" name="date_to" value="{{ filters.date_to ?? '' }}"
+                               class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 text-sm border px-3 py-1.5">
+                    </div>
+                    <!-- Amount Min -->
+                    <div>
+                        <label for="filter-amount-min" class="block text-xs font-medium text-gray-500 mb-1">Betrag min (€)</label>
+                        <input type="number" step="0.01" id="filter-amount-min" name="amount_min" value="{{ filters.amount_min ?? '' }}"
+                               placeholder="z.B. -100"
+                               class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 text-sm border px-3 py-1.5">
+                    </div>
+                    <!-- Amount Max -->
+                    <div>
+                        <label for="filter-amount-max" class="block text-xs font-medium text-gray-500 mb-1">Betrag max (€)</label>
+                        <input type="number" step="0.01" id="filter-amount-max" name="amount_max" value="{{ filters.amount_max ?? '' }}"
+                               placeholder="z.B. 500"
+                               class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 text-sm border px-3 py-1.5">
+                    </div>
+                    <!-- Direction -->
+                    <div>
+                        <label for="filter-direction" class="block text-xs font-medium text-gray-500 mb-1">Richtung</label>
+                        <select id="filter-direction" name="direction"
+                                class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 text-sm border px-3 py-1.5">
+                            <option value="">Alle</option>
+                            <option value="in" {% if filters.direction == 'in' %}selected{% endif %}>Nur Eingänge</option>
+                            <option value="out" {% if filters.direction == 'out' %}selected{% endif %}>Nur Ausgänge</option>
+                        </select>
+                    </div>
+                    <!-- Source -->
+                    <div>
+                        <label for="filter-source" class="block text-xs font-medium text-gray-500 mb-1">Quelle</label>
+                        <select id="filter-source" name="source"
+                                class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 text-sm border px-3 py-1.5">
+                            <option value="">Alle</option>
+                            <option value="bank" {% if filters.source == 'bank' %}selected{% endif %}>Nur Banken</option>
+                            <option value="paypal" {% if filters.source == 'paypal' %}selected{% endif %}>Nur PayPal</option>
+                        </select>
+                    </div>
+                    <!-- Bank -->
+                    <div>
+                        <label for="filter-bank" class="block text-xs font-medium text-gray-500 mb-1">Bank</label>
+                        <select id="filter-bank" name="bank_id"
+                                class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 text-sm border px-3 py-1.5">
+                            <option value="">Alle Banken</option>
+                            {% for bank in banks %}
+                            <option value="{{ bank.id }}" {% if filters.bank_id == bank.id %}selected{% endif %}>{{ bank.name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <!-- Bank account -->
+                    <div>
+                        <label for="filter-account" class="block text-xs font-medium text-gray-500 mb-1">Bankkonto</label>
+                        <select id="filter-account" name="account_id"
+                                class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 text-sm border px-3 py-1.5">
+                            <option value="">Alle Konten</option>
+                            {% for acc in accounts %}
+                            <option value="{{ acc.id }}" {% if filters.account_id == acc.id %}selected{% endif %}>
+                                {{ acc.bank_name }} – {{ acc.display_name ?? acc.account_number }}{% if acc.iban %} ({{ acc.iban }}){% endif %}
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <!-- PayPal account -->
+                    <div>
+                        <label for="filter-paypal" class="block text-xs font-medium text-gray-500 mb-1">PayPal-Konto</label>
+                        <select id="filter-paypal" name="paypal_account_id"
+                                class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 text-sm border px-3 py-1.5">
+                            <option value="">Alle PayPal-Konten</option>
+                            {% for pp in paypal_accounts %}
+                            <option value="{{ pp.id }}" {% if filters.paypal_account_id == pp.id %}selected{% endif %}>
+                                {{ pp.name }}{% if pp.email %} ({{ pp.email }}){% endif %}
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                </div>
+                <div class="flex items-center gap-2 pt-1">
+                    <button type="submit"
+                            class="inline-flex items-center rounded-md bg-primary-600 px-3 py-1.5 text-sm font-semibold text-white shadow-sm hover:bg-primary-500">
+                        <svg class="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+                        </svg>
+                        Suchen
+                    </button>
+                    {% if filters|length > 0 %}
+                    <a href="?" class="inline-flex items-center rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50">
+                        Filter zurücksetzen
+                    </a>
+                    {% endif %}
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Result summary -->
+    {% if filters|length > 0 %}
+    <div class="bg-white shadow rounded-lg p-4 grid grid-cols-1 sm:grid-cols-4 gap-4 text-sm">
+        <div>
+            <p class="text-xs uppercase tracking-wide text-gray-500">Treffer</p>
+            <p class="text-lg font-semibold text-gray-900">{{ pagination.total_items }}</p>
+        </div>
+        <div>
+            <p class="text-xs uppercase tracking-wide text-gray-500">Summe Eingänge</p>
+            <p class="text-lg font-semibold text-green-600">+{{ aggregates.sum_in|number_format(2, ',', '.') }} €</p>
+        </div>
+        <div>
+            <p class="text-xs uppercase tracking-wide text-gray-500">Summe Ausgänge</p>
+            <p class="text-lg font-semibold text-red-600">{{ aggregates.sum_out|number_format(2, ',', '.') }} €</p>
+        </div>
+        <div>
+            <p class="text-xs uppercase tracking-wide text-gray-500">Saldo</p>
+            <p class="text-lg font-semibold {% if aggregates.sum_net >= 0 %}text-green-600{% else %}text-red-600{% endif %}">
+                {{ aggregates.sum_net|number_format(2, ',', '.') }} €
+            </p>
+        </div>
+        {% if aggregates.limited %}
+        <div class="sm:col-span-4 text-xs text-amber-600">
+            ⚠ Summen basieren auf den ersten 5000 Treffern. Verfeinern Sie die Filter für exakte Werte.
+        </div>
+        {% endif %}
+    </div>
+    {% endif %}
+
+    <!-- Result list -->
+    <div class="bg-white shadow rounded-lg">
+        {% if transactions|length > 0 %}
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-gray-200">
+                <thead class="bg-gray-50">
+                    <tr>
+                        <th scope="col" class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Datum</th>
+                        <th scope="col" class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Quelle</th>
+                        <th scope="col" class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Empfänger/Auftraggeber</th>
+                        <th scope="col" class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Verwendungszweck</th>
+                        <th scope="col" class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Betrag</th>
+                    </tr>
+                </thead>
+                <tbody class="bg-white divide-y divide-gray-200">
+                    {% for tx in transactions %}
+                    <tr class="hover:bg-gray-50">
+                        <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500">
+                            {% if tx.date %}{{ tx.date|date('d.m.Y') }}{% else %}-{% endif %}
+                        </td>
+                        <td class="px-4 py-3 text-sm">
+                            {% if tx.source_type == 'paypal' %}
+                            <a href="/paypal/{{ tx.source_id }}" class="inline-flex items-center gap-1.5">
+                                <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-800">PayPal</span>
+                                <span class="text-gray-900">{{ tx.account_name }}</span>
+                            </a>
+                            {% else %}
+                            <a href="/accounts/{{ tx.source_id }}" class="inline-flex flex-col">
+                                <span class="text-gray-900 font-medium">{{ tx.account_name ?? '-' }}</span>
+                                <span class="text-xs text-gray-500">{{ tx.bank_name }}</span>
+                            </a>
+                            {% endif %}
+                        </td>
+                        <td class="px-4 py-3 text-sm text-gray-900">
+                            <div class="font-medium">{{ tx.counterparty ?? '-' }}</div>
+                            {% if tx.counterparty_iban %}
+                            <div class="text-xs text-gray-400">{{ tx.counterparty_iban }}</div>
+                            {% endif %}
+                        </td>
+                        <td class="px-4 py-3 text-sm text-gray-500">
+                            <div class="max-w-xs truncate" title="{{ tx.description ?? tx.booking_text ?? '' }}">
+                                {{ tx.description ?? tx.booking_text ?? '-' }}
+                            </div>
+                        </td>
+                        <td class="px-4 py-3 whitespace-nowrap text-sm text-right font-medium {% if tx.amount >= 0 %}text-green-600{% else %}text-red-600{% endif %}">
+                            {{ tx.amount|number_format(2, ',', '.') }} {{ tx.currency }}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Pagination -->
+        {% if pagination.total_pages > 1 %}
+        <div class="px-4 py-3 border-t border-gray-200 flex items-center justify-between">
+            <p class="text-sm text-gray-700">
+                Seite <span class="font-medium">{{ pagination.current_page }}</span> von <span class="font-medium">{{ pagination.total_pages }}</span>
+            </p>
+            <div class="flex gap-2">
+                {% if pagination.has_prev %}
+                <a href="?page={{ pagination.current_page - 1 }}{{ filter_query }}" class="inline-flex items-center px-3 py-1.5 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50">
+                    Zurück
+                </a>
+                {% endif %}
+                {% if pagination.has_next %}
+                <a href="?page={{ pagination.current_page + 1 }}{{ filter_query }}" class="inline-flex items-center px-3 py-1.5 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50">
+                    Weiter
+                </a>
+                {% endif %}
+            </div>
+        </div>
+        {% endif %}
+
+        {% else %}
+        <div class="px-4 py-12 text-center">
+            {% if filters|length > 0 %}
+            <span class="text-4xl">🔍</span>
+            <p class="mt-2 text-sm text-gray-500">Keine Transaktionen gefunden</p>
+            <p class="text-sm text-gray-400">Versuchen Sie andere Filterkriterien</p>
+            <a href="?" class="mt-3 inline-flex items-center text-sm text-primary-600 hover:text-primary-500">Filter zurücksetzen</a>
+            {% else %}
+            <span class="text-4xl">📋</span>
+            <p class="mt-2 text-sm text-gray-500">Geben Sie Suchkriterien ein, um Transaktionen zu finden</p>
+            <p class="text-sm text-gray-400">Die Suche durchsucht alle synchronisierten Bank- und PayPal-Buchungen.</p>
+            {% endif %}
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}
