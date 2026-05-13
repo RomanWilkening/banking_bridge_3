@@ -246,6 +246,7 @@ try {
                     continue;
                 }
                 $accName = $accountsById[$accId]['account_name'] ?? ('Konto #' . $accId);
+                $detail = $results['transactions_errors'][$accId] ?? null;
                 if ($status === 'needs_tan') {
                     $msg = "Transaktionen für '{$accName}' übersprungen — TAN erforderlich";
                     $logger->warning($msg);
@@ -257,10 +258,10 @@ try {
                     $db->logActivity('auto_sync_partial', 'warning', $msg, $bankId, (int) $accId);
                     $partialIssues[] = $bankName . '/' . $accName . ' (TAN-blockiert)';
                 } elseif ($status === 'failed') {
-                    $msg = "Transaktionen für '{$accName}' fehlgeschlagen";
+                    $msg = "Transaktionen für '{$accName}' fehlgeschlagen" . ($detail ? ': ' . $detail : '');
                     $logger->warning($msg);
                     $db->logActivity('auto_sync_partial', 'warning', $msg, $bankId, (int) $accId);
-                    $partialIssues[] = $bankName . '/' . $accName . ' (Transaktionsfehler)';
+                    $partialIssues[] = $bankName . '/' . $accName . ' (Transaktionsfehler' . ($detail ? ': ' . $detail : '') . ')';
                 }
             }
             foreach ($results['holdings_status'] ?? [] as $accId => $status) {
@@ -268,16 +269,17 @@ try {
                     continue;
                 }
                 $accName = $accountsById[$accId]['account_name'] ?? ('Depot #' . $accId);
+                $detail = $results['holdings_errors'][$accId] ?? null;
                 if ($status === 'needs_tan') {
                     $msg = "Depot-Bestand für '{$accName}' übersprungen — TAN erforderlich";
                     $logger->warning($msg);
                     $db->logActivity('auto_sync_partial', 'warning', $msg, $bankId, (int) $accId);
                     $partialIssues[] = $bankName . '/' . $accName . ' (TAN für Depot)';
                 } elseif ($status === 'failed') {
-                    $msg = "Depot-Bestand für '{$accName}' fehlgeschlagen";
+                    $msg = "Depot-Bestand für '{$accName}' fehlgeschlagen" . ($detail ? ': ' . $detail : '');
                     $logger->warning($msg);
                     $db->logActivity('auto_sync_partial', 'warning', $msg, $bankId, (int) $accId);
-                    $partialIssues[] = $bankName . '/' . $accName . ' (Depot-Fehler)';
+                    $partialIssues[] = $bankName . '/' . $accName . ' (Depot-Fehler' . ($detail ? ': ' . $detail : '') . ')';
                 }
             }
             if (!empty($partialIssues)) {

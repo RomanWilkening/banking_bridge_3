@@ -504,7 +504,7 @@ class FinTSService
      * @param array $bankConfig Bank configuration
      * @param array $accountsFromDb Accounts to sync
      * @param string|null $persistedInstance Persisted FinTS session (preserves kundensystemId for TAN-free access)
-     * @param array<int,\DateTime>|null $perAccountFrom Optional map of account id => start date for the
+     * @param array<int, \DateTime>|null $perAccountFrom Optional map of account id => start date for the
      *        transaction window. Accounts not listed fall back to the default last-30-days window.
      *        Used by the auto-sync to catch up after outages.
      */
@@ -524,7 +524,10 @@ class FinTSService
             // Per-account status flags so callers can distinguish
             // "0 new transactions" from "transactions could not be fetched"
             'transactions_status' => [], // accountId => 'success'|'needs_tan'|'failed'|'skipped'
-            'holdings_status' => []      // accountId => 'success'|'needs_tan'|'failed'
+            'holdings_status' => [],     // accountId => 'success'|'needs_tan'|'failed' (depots are processed before transactions, so 'skipped' does not occur here)
+            // Per-account error messages (only when status != 'success')
+            'transactions_errors' => [], // accountId => string
+            'holdings_errors' => []      // accountId => string
         ];
 
         // After a TAN is required for one account's transactions, the FinTS
@@ -679,8 +682,10 @@ class FinTSService
                                 'count' => count($holdingsResult['holdings'])
                             ]);
                         } else {
+                            $errMsg = $holdingsResult['message'] ?? 'Unbekannter Fehler';
                             $results['holdings_status'][$accountId] = !empty($holdingsResult['needs_tan']) ? 'needs_tan' : 'failed';
-                            $results['errors'][] = "Depot {$accountId}: " . ($holdingsResult['message'] ?? 'Unbekannter Fehler');
+                            $results['holdings_errors'][$accountId] = $errMsg;
+                            $results['errors'][] = "Depot {$accountId}: " . $errMsg;
                         }
                     } catch (\Throwable $e) {
                         $this->logger->warning('Failed to fetch depot holdings', [
@@ -688,6 +693,7 @@ class FinTSService
                             'error' => $e->getMessage()
                         ]);
                         $results['holdings_status'][$accountId] = 'failed';
+                        $results['holdings_errors'][$accountId] = $e->getMessage();
                         $results['errors'][] = "Depot {$accountId}: " . $e->getMessage();
                     }
                 } else {
@@ -738,6 +744,7 @@ class FinTSService
                         $txResult = $this->fetchTransactionsInternal($sepaAccount, $from, $to);
                         if (!empty($txResult['needs_tan'])) {
                             $results['transactions_status'][$accountId] = 'needs_tan';
+                            $results['transactions_errors'][$accountId] = $txResult['message'] ?? 'TAN erforderlich';
                             $transactionsBlockedByTan = true;
                             $results['errors'][] = "Transaktionen {$accountId}: TAN erforderlich";
                             $this->logger->warning('Transactions need TAN, blocking further transaction fetches in this run', [
@@ -751,8 +758,10 @@ class FinTSService
                                 'count' => count($txResult['transactions'])
                             ]);
                         } else {
+                            $errMsg = $txResult['message'] ?? 'Unbekannter Fehler';
                             $results['transactions_status'][$accountId] = 'failed';
-                            $results['errors'][] = "Transaktionen {$accountId}: " . ($txResult['message'] ?? 'Unbekannter Fehler');
+                            $results['transactions_errors'][$accountId] = $errMsg;
+                            $results['errors'][] = "Transaktionen {$accountId}: " . $errMsg;
                         }
                     } catch (\Throwable $e) {
                         $this->logger->warning('Failed to fetch transactions', [
@@ -760,6 +769,7 @@ class FinTSService
                             'error' => $e->getMessage()
                         ]);
                         $results['transactions_status'][$accountId] = 'failed';
+                        $results['transactions_errors'][$accountId] = $e->getMessage();
                         $results['errors'][] = "Transaktionen {$accountId}: " . $e->getMessage();
                     }
                 }
