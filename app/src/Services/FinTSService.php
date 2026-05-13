@@ -834,6 +834,14 @@ class FinTSService
 
         $errors = [];
 
+        // Track an MT940 success with empty raw payload so we can still accept
+        // it as a valid (= 0 new bookings) result when CAMT is unavailable or
+        // also fails. Without this, accounts with no movement in the requested
+        // window (e.g. dormant savings accounts) would be reported as errors
+        // even though MT940 technically succeeded. Matches the behavior of
+        // syncAccountTransactions().
+        $mt940EmptyResult = null;
+
         // Try MT940 first
         if ($supportsMT940) {
             try {
@@ -858,13 +866,14 @@ class FinTSService
                 $result = $this->processTransactionsResult($getStatement);
                 if ($result['success']) {
                     // If MT940 returned a completely empty raw response (some
-                    // banks signal "use CAMT" this way), fall through to CAMT
-                    // as a fallback. Otherwise accept the MT940 result even
-                    // when there were 0 bookings in the requested window.
+                    // banks signal "use CAMT" this way), try CAMT as a
+                    // fallback - but remember the MT940 success so we can
+                    // fall back to it if CAMT is unavailable or also fails.
                     if (empty($result['empty_raw_response'])) {
                         return $result;
                     }
-                    $errors['MT940'] = 'Leere MT940-Antwort, versuche CAMT';
+                    $mt940EmptyResult = $result;
+                    $errors['MT940'] = 'Leere MT940-Antwort';
                 } else {
                     $errors['MT940'] = $result['message'] ?? 'MT940 lieferte kein Ergebnis';
                 }
@@ -887,6 +896,17 @@ class FinTSService
             } catch (\Throwable $e) {
                 $errors['CAMT'] = $e->getMessage();
             }
+        }
+
+        // CAMT was unavailable or failed - if we have an MT940 success with
+        // empty raw payload, accept it as "0 transactions" rather than
+        // reporting a spurious failure.
+        if ($mt940EmptyResult !== null) {
+            $this->logger->info('Accepting empty MT940 result (CAMT unavailable or failed)', [
+                'camt_supported' => $supportsCAMT,
+                'camt_error' => $errors['CAMT'] ?? null
+            ]);
+            return $mt940EmptyResult;
         }
 
         if (!$supportsMT940 && !$supportsCAMT) {
