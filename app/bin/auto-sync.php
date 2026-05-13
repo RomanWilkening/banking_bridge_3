@@ -124,7 +124,39 @@ try {
         // Try to use existing session
         $session = $db->getFinTSSession($bankId);
         $persistedInstance = $session ? $session['session_data'] : null;
-        
+
+        // Build per-account "from" dates so the auto-sync can catch up after
+        // outages (TAN was missing for a few days, app was down, ...).
+        // Default window is 30 days. If we already have transactions for an
+        // account, extend the window back to 7 days before the latest stored
+        // booking. Hard upper bound is 90 days to avoid huge unexpected
+        // requests that may themselves trigger a TAN.
+        $perAccountFrom = [];
+        $defaultFrom = new \DateTime('-30 days');
+        $maxFrom = new \DateTime('-90 days');
+        foreach ($accounts as $accountRow) {
+            if (($accountRow['account_type'] ?? 'checking') === 'depot') {
+                continue;
+            }
+            $latest = $db->getLatestTransactionDate((int) $accountRow['id']);
+            if ($latest) {
+                try {
+                    $candidate = new \DateTime($latest);
+                    $candidate->modify('-7 days');
+                    if ($candidate < $maxFrom) {
+                        $candidate = clone $maxFrom;
+                    }
+                    if ($candidate > $defaultFrom) {
+                        // We already have recent data - default 30 days is enough
+                        $candidate = clone $defaultFrom;
+                    }
+                    $perAccountFrom[(int) $accountRow['id']] = $candidate;
+                } catch (\Throwable $e) {
+                    // Ignore parse errors and fall back to default window
+                }
+            }
+        }
+
         try {
             $result = $fintsService->syncAll(
                 [
@@ -134,7 +166,8 @@ try {
                     'password' => $bank['password']
                 ],
                 $accounts,
-                $persistedInstance
+                $persistedInstance,
+                $perAccountFrom
             );
             
             // Skip if TAN required and manual approval is configured
@@ -198,15 +231,71 @@ try {
             }
             
             $totalStats['banks_synced']++;
-            
+
+            // Surface per-account partial failures (transactions/holdings)
+            // that syncAll collected but didn't make it into the top-level
+            // success/needs_tan path. Without this they were silently lost.
+            $accountsById = [];
+            foreach ($accounts as $a) {
+                $accountsById[(int) $a['id']] = $a;
+            }
+
+            $partialIssues = [];
+            foreach ($results['transactions_status'] ?? [] as $accId => $status) {
+                if ($status === 'success') {
+                    continue;
+                }
+                $accName = $accountsById[$accId]['account_name'] ?? ('Konto #' . $accId);
+                if ($status === 'needs_tan') {
+                    $msg = "Transaktionen für '{$accName}' übersprungen — TAN erforderlich";
+                    $logger->warning($msg);
+                    $db->logActivity('auto_sync_partial', 'warning', $msg, $bankId, (int) $accId);
+                    $partialIssues[] = $bankName . '/' . $accName . ' (TAN für Transaktionen)';
+                } elseif ($status === 'skipped') {
+                    $msg = "Transaktionen für '{$accName}' übersprungen — vorherige Konto-Anfrage benötigt TAN";
+                    $logger->warning($msg);
+                    $db->logActivity('auto_sync_partial', 'warning', $msg, $bankId, (int) $accId);
+                    $partialIssues[] = $bankName . '/' . $accName . ' (TAN-blockiert)';
+                } elseif ($status === 'failed') {
+                    $msg = "Transaktionen für '{$accName}' fehlgeschlagen";
+                    $logger->warning($msg);
+                    $db->logActivity('auto_sync_partial', 'warning', $msg, $bankId, (int) $accId);
+                    $partialIssues[] = $bankName . '/' . $accName . ' (Transaktionsfehler)';
+                }
+            }
+            foreach ($results['holdings_status'] ?? [] as $accId => $status) {
+                if ($status === 'success') {
+                    continue;
+                }
+                $accName = $accountsById[$accId]['account_name'] ?? ('Depot #' . $accId);
+                if ($status === 'needs_tan') {
+                    $msg = "Depot-Bestand für '{$accName}' übersprungen — TAN erforderlich";
+                    $logger->warning($msg);
+                    $db->logActivity('auto_sync_partial', 'warning', $msg, $bankId, (int) $accId);
+                    $partialIssues[] = $bankName . '/' . $accName . ' (TAN für Depot)';
+                } elseif ($status === 'failed') {
+                    $msg = "Depot-Bestand für '{$accName}' fehlgeschlagen";
+                    $logger->warning($msg);
+                    $db->logActivity('auto_sync_partial', 'warning', $msg, $bankId, (int) $accId);
+                    $partialIssues[] = $bankName . '/' . $accName . ' (Depot-Fehler)';
+                }
+            }
+            if (!empty($partialIssues)) {
+                $totalStats['errors'] = array_merge($totalStats['errors'], $partialIssues);
+            }
+
             $db->logActivity(
                 'auto_sync',
-                'success',
-                sprintf("Auto-Sync abgeschlossen"),
+                empty($partialIssues) ? 'success' : 'warning',
+                empty($partialIssues)
+                    ? 'Auto-Sync abgeschlossen'
+                    : 'Auto-Sync abgeschlossen mit ' . count($partialIssues) . ' Teilproblem(en)',
                 $bankId
             );
-            
-            $logger->info("Successfully synced {$bankName}");
+
+            $logger->info("Successfully synced {$bankName}", [
+                'partial_issues' => count($partialIssues)
+            ]);
             
         } catch (\Throwable $e) {
             $logger->error("Exception for {$bankName}: " . $e->getMessage());
