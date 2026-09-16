@@ -42,7 +42,7 @@ try {
     // phpFinTS cannot prohibit a challenge before login/execute sends HKTAN.
     // Do not instantiate a bank dialog, even with a recently cached session.
     $authorization = new AuthorizationService($db, new FinTSService($logger));
-    $stats = ['banks_synced' => 0, 'banks_skipped' => 0, 'paypal_synced' => 0,
+    $stats = ['banks_synced' => 0, 'banks_skipped' => 0, 'paypal_synced' => 0, 'paypal_partial' => 0,
         'balances_updated' => 0, 'transactions_new' => 0, 'holdings_updated' => 0, 'errors' => []];
     foreach ($db->getAllBanks() as $bank) {
         $id = (int) $bank['id'];
@@ -63,13 +63,14 @@ try {
     foreach ($db->getAllPayPalAccounts() as $account) {
         try {
             $result = $paypal->syncAccount((int) $account['id']);
+            $stats['balances_updated'] += isset($result['balance']) ? 1 : 0;
+            $stats['transactions_new'] += (int) ($result['transactions_new'] ?? 0);
             if (empty($result['success'])) {
+                $stats['paypal_partial'] += !empty($result['partial']) ? 1 : 0;
                 $stats['errors'][] = 'PayPal: ' . $account['name'];
                 continue;
             }
             $stats['paypal_synced']++;
-            $stats['balances_updated'] += isset($result['balance']) ? 1 : 0;
-            $stats['transactions_new'] += (int) ($result['transactions_new'] ?? 0);
         } catch (\Throwable $e) {
             $stats['errors'][] = 'PayPal: ' . $account['name'];
             $logger->warning('PayPal sync failed', ['account_id' => $account['id']]);

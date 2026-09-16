@@ -14,7 +14,8 @@ class AuthorizationService
         $this->db->getPdo()->exec('CREATE TABLE IF NOT EXISTS fints_authorization_operations (
             bank_id INTEGER PRIMARY KEY, operation_id TEXT NOT NULL, owner_hash TEXT NOT NULL,
             request_id TEXT NOT NULL, status TEXT NOT NULL, payload TEXT,
-            response TEXT, expires_at INTEGER NOT NULL, next_poll_at INTEGER NOT NULL DEFAULT 0
+            response TEXT, expires_at INTEGER NOT NULL, next_poll_at INTEGER NOT NULL DEFAULT 0,
+            FOREIGN KEY (bank_id) REFERENCES banks(id) ON DELETE CASCADE
         )');
     }
 
@@ -82,9 +83,11 @@ class AuthorizationService
                 return $this->failure('bank_not_found', 404);
             }
             $operation = $this->operation($bankId);
-            $result = ['success' => true, 'authorization' => $this->db->getBankAuthorizationState($bankId),
+            $state = $this->db->getBankAuthorizationState($bankId);
+            $result = ['success' => true, 'authorization' => $state,
                 'background_sync_available' => false, 'background_sync_reason' => FinTSService::BACKGROUND_BLOCK_REASON,
-                'authorization_expiry_source' => 'local_policy', 'authorization_expiry_is_bank_guarantee' => false];
+                'authorization_expiry_source' => $state['expires_at'] === null ? null : 'local_policy',
+                'authorization_expiry_is_bank_guarantee' => false];
             if ($operation && $operation['status'] === 'pending' && hash_equals($operation['owner_hash'], hash('sha256', $owner))) {
                 $pending = json_decode($operation['response'] ?? '{}', true);
                 $result['operation_id'] = $operation['operation_id'];

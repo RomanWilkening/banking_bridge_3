@@ -169,7 +169,7 @@ try {
     putenv('MQTT_USER=');
     putenv('MQTT_PASSWORD=');
     putenv('MQTT_TOPIC_PREFIX=banking');
-    $db = new MqttTestDatabase($directory . '/banking.db');
+    $db = new MqttTestDatabase($directory . '/mock-banking.db');
     $logger = new Logger('mqtt-test');
     $service = new MqttService($logger, $db);
     check(!$service->isEnabled(), 'Environment must not bypass the explicit enable gate');
@@ -202,6 +202,18 @@ try {
     $count = count(messages($trace));
     $restart = new MqttService($logger, $db);
     check($restart->publishAuthorizationStates()['published'] === 0 && count(messages($trace)) === $count, 'Dedup across service restart');
+    $beforeBrokerLoss = retained($trace);
+    file_put_contents($trace, '');
+    check(retained($trace) === [], 'Simulate broker restart losing all retained messages');
+    $inventory = json_decode($db->getSetting('mqtt_authorization_publications'), true, 512, JSON_THROW_ON_ERROR);
+    $brokerKey = array_key_first($inventory);
+    $inventory[$brokerKey]['last_full_publish'] = time() - 3601;
+    $db->setSetting('mqtt_authorization_publications', json_encode($inventory, JSON_THROW_ON_ERROR));
+    $refreshed = $restart->publishAuthorizationStates();
+    check($refreshed['success'] && $refreshed['full_refresh'] && $refreshed['refresh_interval_seconds'] === 3600
+        && $refreshed['published'] === 4, 'Hourly refresh reannounces every discovery and state topic');
+    check(retained($trace) === $beforeBrokerLoss, 'Hourly refresh restores broker-retained discovery and state');
+    check($restart->publishAuthorizationStates()['published'] === 0, 'Normal minute publication remains deduplicated after refresh');
     $inventory = json_decode($db->getSetting('mqtt_authorization_publications'), true, 512, JSON_THROW_ON_ERROR);
     $brokerKey = array_key_first($inventory);
     $legacyState = 'banking/institutes/01234567/authorization';
@@ -234,17 +246,24 @@ try {
     $db->states[1]['reason'] = 'DO_NOT_EXPORT';
     file_put_contents($noAck, '1');
     $db->states[2] = ['status' => 'pending'];
+    $inventory = json_decode($db->getSetting('mqtt_authorization_publications'), true, 512, JSON_THROW_ON_ERROR);
+    $lastSuccessfulRefresh = time() - 3601;
+    $inventory[$brokerKey]['last_full_publish'] = $lastSuccessfulRefresh;
+    $db->setSetting('mqtt_authorization_publications', json_encode($inventory, JSON_THROW_ON_ERROR));
     $failed = $restart->publishAuthorizationStates();
     check(!$failed['success'], 'Missing PUBACK must fail, not silently succeed on loop timeout');
     $inventory = json_decode($db->getSetting('mqtt_authorization_publications'), true, 512, JSON_THROW_ON_ERROR);
     check(in_array(null, array_values(array_values($inventory)[0]['topics']), true), 'Unacknowledged publications remain pending');
+    check($inventory[$brokerKey]['last_full_publish'] === $lastSuccessfulRefresh, 'Failed refresh never advances full-publication timestamp');
     unlink($noAck);
-    $reopened = new MqttTestDatabase($directory . '/banking.db');
+    $reopened = new MqttTestDatabase($directory . '/mock-banking.db');
     $reopened->banks = $db->banks;
     $reopened->states = $db->states;
     $service = new MqttService($logger, $reopened);
     $retry = $service->publishAuthorizationStates();
-    check($retry['success'] && $retry['published'] > 0, 'Retry pending publications after outage and process state reload');
+    check($retry['success'] && $retry['full_refresh'] && $retry['published'] === 4, 'Retry complete refresh after outage and process state reload');
+    $inventory = json_decode($reopened->getSetting('mqtt_authorization_publications'), true, 512, JSON_THROW_ON_ERROR);
+    check($inventory[$brokerKey]['last_full_publish'] > $lastSuccessfulRefresh, 'Successful all-ACK refresh advances full-publication timestamp');
     $reopened->setSetting('mqtt_topic_prefix', 'new');
     check($service->publishAuthorizationStates()['success'], 'Prefix change reconciles inventory');
     $values = retained($trace);
@@ -285,7 +304,7 @@ try {
     $rows = array_map(fn($line) => json_decode($line, true), file($trace, FILE_IGNORE_NEW_LINES));
     $clientIds = array_column($rows, 'client_id');
     check(count($clientIds) === count(array_unique($clientIds)), 'Concurrent/restarted publisher client IDs must be unique');
-    $realDatabase = new DatabaseService($directory . '/real-banking.db');
+    $realDatabase = new DatabaseService($directory . '/banking.db');
     $bankId = $realDatabase->createBank([
         'name' => 'Local policy fixture', 'bank_code' => '01234567', 'fints_url' => 'https://bank.invalid',
         'username' => 'fixture', 'password' => 'fixture',
@@ -305,6 +324,40 @@ try {
         && $actualPayload['reason'] === $actualState['reason']
         && $actualPayload['authenticated_at'] === $authenticated
         && $actualPayload['expiry_basis'] === 'local_policy', 'MQTT matches persisted local expiry and factual history');
+    $realDatabase->setSetting('auto_sync_enabled', '0');
+    $realDatabase->setSetting('mqtt_auto_publish_enabled', '0');
+    $realDatabase->setBankAuthorizationState($bankId, 'pending', 'tan_confirmation_pending');
+    $realDatabase->saveFinTSSession($bankId, 'PRIVATE_SESSION_FIXTURE');
+    $realDatabase->getPdo()->exec('CREATE TABLE IF NOT EXISTS fints_authorization_operations (
+        bank_id INTEGER PRIMARY KEY, operation_id TEXT NOT NULL, owner_hash TEXT NOT NULL,
+        request_id TEXT NOT NULL, status TEXT NOT NULL, payload TEXT, response TEXT,
+        expires_at INTEGER NOT NULL, next_poll_at INTEGER NOT NULL DEFAULT 0,
+        FOREIGN KEY (bank_id) REFERENCES banks(id) ON DELETE CASCADE
+    )');
+    $realDatabase->getPdo()->prepare('INSERT INTO fints_authorization_operations
+        (bank_id, operation_id, owner_hash, request_id, status, payload, response, expires_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)')->execute([
+            $bankId, 'fixture-operation', hash('sha256', 'fixture-owner'), 'fixture-request', 'pending',
+            '{"challenge":"PRIVATE_CHALLENGE_FIXTURE"}', '{}', time() - 1,
+        ]);
+    $process = proc_open([PHP_BINARY, __DIR__ . '/../bin/mqtt-publish.php'],
+        [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes, null, array_merge(getenv(), ['DATA_PATH' => $directory]));
+    check(is_resource($process), 'Start MQTT-only cron fixture');
+    $output = stream_get_contents($pipes[1]);
+    $errors = stream_get_contents($pipes[2]);
+    fclose($pipes[1]);
+    fclose($pipes[2]);
+    check(proc_close($process) === 0, 'MQTT-only cron failed: ' . $output . $errors);
+    $operation = $realDatabase->getPdo()->query('SELECT * FROM fints_authorization_operations')->fetch(PDO::FETCH_ASSOC);
+    check($operation['status'] === 'expired' && $operation['payload'] === null,
+        'MQTT-only cron clears expired pending challenge even when all synchronization is disabled');
+    check($realDatabase->getFinTSSession($bankId, true) === null, 'Expired operation removes its stale technical session');
+    $cronState = $realDatabase->getBankAuthorizationState($bankId);
+    $cronPayload = retained($trace)["database-check/banks/{$bankId}/authorization"];
+    check($cronState['status'] === 'required' && $cronState['reason'] === 'authorization_expired'
+        && $cronPayload['status'] === 'required' && $cronPayload['reason'] === 'authorization_expired',
+        'MQTT-only cron persists and publishes operation expiry distinct from local maximum age');
+    check(!str_contains(file_get_contents($trace), 'PRIVATE_'), 'MQTT-only cleanup never exports private operation/session data');
     echo "PASS MQTT authorization: retained QoS1/ACK, privacy, independent bank IDs, expiry, dedup, restart retry, cleanup, environment, nullable balances, failures\n";
 } finally {
     foreach ($oldEnvironment as $key => $value) {

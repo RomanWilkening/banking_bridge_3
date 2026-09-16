@@ -33,8 +33,16 @@ class ApiController
         return $_SESSION['fints_authorization_owner'];
     }
 
-    private function authorizationResponse(Response $response, array $result): Response
+    private function authorizationResponse(Response $response, array $result, bool $publish = false): Response
     {
+        if ($publish && $this->mqttService->isEnabled()) {
+            try {
+                $this->mqttService->publishAuthorizationStates();
+            } catch (\Throwable $e) {
+                // MQTT failure must never invalidate or replay a completed bank operation.
+                $this->logger->warning('Authorization state MQTT publication failed');
+            }
+        }
         $status = $result['http_status'] ?? 200;
         unset($result['http_status']);
         return $this->jsonResponse($response, $result, $status);
@@ -48,7 +56,7 @@ class ApiController
             return $this->jsonResponse($response, ['success' => false, 'reason' => 'invalid_request_id'], 400);
         }
         return $this->authorizationResponse($response, $this->authorizationService()->authorize(
-            (int) $args['id'], $this->authorizationOwner(), $requestId));
+            (int) $args['id'], $this->authorizationOwner(), $requestId), true);
     }
 
     public function authorizationState(Request $request, Response $response, array $args): Response
@@ -64,7 +72,7 @@ class ApiController
             return $this->jsonResponse($response, ['success' => false, 'reason' => 'invalid_tan_submission'], 400);
         }
         return $this->authorizationResponse($response, $this->authorizationService()->resume(
-            (int) $args['id'], $this->authorizationOwner(), $data['operation_id'], trim($data['tan']), false));
+            (int) $args['id'], $this->authorizationOwner(), $data['operation_id'], trim($data['tan']), false), true);
     }
 
     public function pollAuthorization(Request $request, Response $response, array $args): Response
@@ -74,7 +82,7 @@ class ApiController
             return $this->jsonResponse($response, ['success' => false, 'reason' => 'operation_id_required'], 400);
         }
         return $this->authorizationResponse($response, $this->authorizationService()->resume(
-            (int) $args['id'], $this->authorizationOwner(), $data['operation_id'], null, true));
+            (int) $args['id'], $this->authorizationOwner(), $data['operation_id'], null, true), true);
     }
 
     public function cancelAuthorization(Request $request, Response $response, array $args): Response
@@ -84,13 +92,13 @@ class ApiController
             return $this->jsonResponse($response, ['success' => false, 'reason' => 'operation_id_required'], 400);
         }
         return $this->authorizationResponse($response, $this->authorizationService()->cancel(
-            (int) $args['id'], $this->authorizationOwner(), $data['operation_id']));
+            (int) $args['id'], $this->authorizationOwner(), $data['operation_id']), true);
     }
 
     public function resetAuthorization(Request $request, Response $response, array $args): Response
     {
         return $this->authorizationResponse($response, $this->authorizationService()->cancel(
-            (int) $args['id'], $this->authorizationOwner(), '', true));
+            (int) $args['id'], $this->authorizationOwner(), '', true), true);
     }
 
     public function backgroundBankSync(Request $request, Response $response, array $args): Response
@@ -1252,6 +1260,7 @@ class ApiController
             'banks_synced' => 0,
             'banks_skipped' => 0,
             'paypal_synced' => 0,
+            'paypal_partial' => 0,
             'balances_updated' => 0,
             'transactions_new' => 0,
             'holdings_updated' => 0,
@@ -1268,7 +1277,7 @@ class ApiController
             $accounts = $this->db->getAccountsForBackgroundSync((int) $bankId);
             if (empty($accounts)) {
                 $this->logger->info('Skipping bank - no accounts', ['bank_id' => $bankId]);
-                $results[$bankName] = ['status' => 'skipped', 'reason' => 'Keine Konten'];
+                $results[$bankId] = ['bank_id' => $bankId, 'bank_name' => $bankName, 'status' => 'skipped', 'reason' => 'no_background_accounts'];
                 $totalStats['banks_skipped']++;
                 continue;
             }
@@ -1276,7 +1285,7 @@ class ApiController
             try {
                 $result = $this->authorizationService()->blocked((int) $bankId);
                 if (!empty($result['blocked'])) {
-                    $results[$bankName] = ['status' => 'skipped', 'reason' => $result['reason']];
+                    $results[$bankId] = ['bank_id' => $bankId, 'bank_name' => $bankName, 'status' => 'skipped', 'reason' => $result['reason']];
                     $totalStats['banks_skipped']++;
                     $totalStats['errors'][] = $bankName . ': ' . $result['reason'];
                     
@@ -1294,14 +1303,14 @@ class ApiController
                         'bank_id' => $bankId,
                         'error' => $result['message'] ?? 'Unknown'
                     ]);
-                    $results[$bankName] = ['status' => 'error', 'error' => $result['message'] ?? 'Unbekannter Fehler'];
+                    $results[$bankId] = ['bank_id' => $bankId, 'bank_name' => $bankName, 'status' => 'error', 'error' => $result['message'] ?? 'Unbekannter Fehler'];
                     $totalStats['errors'][] = "{$bankName}: " . ($result['message'] ?? 'Unbekannter Fehler');
                     continue;
                 }
                 
                 // Process successful results
                 $bankStats = $this->processAutoSyncResults($bankId, $result);
-                $results[$bankName] = ['status' => 'success', 'stats' => $bankStats];
+                $results[$bankId] = ['bank_id' => $bankId, 'bank_name' => $bankName, 'status' => 'success', 'stats' => $bankStats];
                 
                 $totalStats['banks_synced']++;
                 $totalStats['balances_updated'] += $bankStats['balances_updated'];
@@ -1313,7 +1322,7 @@ class ApiController
                     'bank_id' => $bankId,
                     'error' => $e->getMessage()
                 ]);
-                $results[$bankName] = ['status' => 'error', 'error' => $e->getMessage()];
+                $results[$bankId] = ['bank_id' => $bankId, 'bank_name' => $bankName, 'status' => 'error', 'error' => $e->getMessage()];
                 $totalStats['errors'][] = "{$bankName}: {$e->getMessage()}";
             }
         }
@@ -1322,13 +1331,14 @@ class ApiController
         foreach ($this->db->getAllPayPalAccounts() as $account) {
             try {
                 $result = $paypal->syncAccount((int) $account['id']);
+                $totalStats['balances_updated'] += isset($result['balance']) ? 1 : 0;
+                $totalStats['transactions_new'] += (int) ($result['transactions_new'] ?? 0);
                 if (empty($result['success'])) {
+                    $totalStats['paypal_partial'] += !empty($result['partial']) ? 1 : 0;
                     $totalStats['errors'][] = 'PayPal: ' . $account['name'];
                     continue;
                 }
                 $totalStats['paypal_synced']++;
-                $totalStats['balances_updated'] += isset($result['balance']) ? 1 : 0;
-                $totalStats['transactions_new'] += (int) ($result['transactions_new'] ?? 0);
             } catch (\Throwable $e) {
                 $totalStats['errors'][] = 'PayPal: ' . $account['name'];
             }

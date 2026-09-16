@@ -11,6 +11,7 @@ use Monolog\Logger;
 
 class MqttService
 {
+    private const AUTHORIZATION_REANNOUNCE_INTERVAL = 3600;
     private ?MqttClient $client = null;
     private ?MemoryRepository $repository = null;
     private Logger $logger;
@@ -190,6 +191,7 @@ class MqttService
         }
         $published = 0;
         $warnings = [];
+        $fullRefresh = false;
         $lock = null;
         try {
             $database = $this->db->getPdo()->query('PRAGMA database_list')->fetchAll(\PDO::FETCH_ASSOC);
@@ -216,6 +218,10 @@ class MqttService
                 }
             }
             $inventory[$broker] ??= ['topics' => []];
+            $lastFullPublish = (int) ($inventory[$broker]['last_full_publish'] ?? 0);
+            $now = time();
+            $fullRefresh = $lastFullPublish <= 0 || $lastFullPublish > $now
+                || ($now - $lastFullPublish) >= self::AUTHORIZATION_REANNOUNCE_INTERVAL;
             $topics = &$inventory[$broker]['topics'];
             $changes = [];
             foreach ($topics as $topic => $hash) {
@@ -224,7 +230,7 @@ class MqttService
                 }
             }
             foreach ($desired as $topic => $payload) {
-                if (($topics[$topic] ?? null) !== hash('sha256', $payload)) {
+                if ($fullRefresh || ($topics[$topic] ?? null) !== hash('sha256', $payload)) {
                     $changes[$topic] = $payload;
                 }
             }
@@ -249,15 +255,23 @@ class MqttService
                     $published++;
                 }
             }
+            if ($fullRefresh) {
+                // A broker may lose retained data on restart. Reannounce both discovery
+                // and state hourly, advancing the deadline only after every PUBACK.
+                $inventory[$broker]['last_full_publish'] = time();
+                $this->saveAuthorizationInventory($inventory);
+            }
             foreach ($warnings as $warning) {
                 $this->logger->warning($warning);
             }
             return ['success' => true, 'message' => "{$published} Autorisierungsthemen veröffentlicht",
-                'published' => $published, 'errors' => [], 'warnings' => $warnings];
+                'published' => $published, 'errors' => [], 'warnings' => $warnings,
+                'full_refresh' => $fullRefresh, 'refresh_interval_seconds' => self::AUTHORIZATION_REANNOUNCE_INTERVAL];
         } catch (\Throwable $e) {
             $this->logger->error('MQTT authorization publication failed', ['error' => $e->getMessage()]);
             return ['success' => false, 'message' => $e->getMessage(), 'published' => $published,
-                'errors' => [$e->getMessage()], 'warnings' => $warnings];
+                'errors' => [$e->getMessage()], 'warnings' => $warnings,
+                'full_refresh' => $fullRefresh, 'refresh_interval_seconds' => self::AUTHORIZATION_REANNOUNCE_INTERVAL];
         } finally {
             $this->disconnect();
             if (is_resource($lock)) {
@@ -319,7 +333,10 @@ class MqttService
         return in_array($reason, ['authorization_expired', 'local_authorization_expired', 'authentication_required', 'authorization_required',
             'tan_required', 'tan_pending', 'sca_required', 'sca_pending', 'session_expired', 'session_missing',
             'authentication_failed', 'authorization_failed', 'bank_error', 'network_error', 'manual_authorization',
-            'authorization_completed', 'automatic_tan_prevention_unavailable', 'legacy_session', 'unknown'], true) ? $reason : 'unspecified';
+            'authorization_completed', 'automatic_tan_prevention_unavailable', 'explicit_authorization_started',
+            'tan_confirmation_pending', 'authorization_poll_limit', 'authorization_cancelled', 'session_reset',
+            'fints_operation_failed', 'authorization_operation_failed', 'not_authenticated',
+            'legacy_session', 'unknown'], true) ? $reason : 'unspecified';
     }
 
     private function addAuthorizationTopics(array &$topics, string $stateTopic, string $id, array $payload, string $bankName): void

@@ -21,12 +21,15 @@ Sync-Beispiele beschreiben die Datenform, nicht eine Zusage automatischer Abrufe
 - `POST /api/banks/{id}/authorization/cancel` verwirft einen manuellen Vorgang
   lokal, ohne einen neuen Bankdialog zu öffnen.
 
-Der Startauftrag kann eine stabile `request_id` (8–128 alphanumerische Zeichen,
+Der Startauftrag muss eine stabile `request_id` (8–128 alphanumerische Zeichen,
 Unterstrich oder Bindestrich) enthalten. Bei Wiederholung dieselbe ID verwenden.
 Die Antwort enthält die `operation_id`, die bei TAN, Polling und Abbruch zusammen
 mit derselben Browser-Session zu senden ist. Ein anderer Browser kann eine
 laufende Freigabe nicht übernehmen. `needs_tan` bedeutet eine tatsächlich
 vorliegende Challenge; `blocked` bedeutet dagegen keine ausgeführte Bankanfrage.
+Bei einer neuen Challenge kann die `operation_id` wechseln; stets die zuletzt
+vom Server gelieferte ID für die nächste TAN beziehungsweise Statusabfrage
+verwenden.
 
 ## Inhaltsverzeichnis
 

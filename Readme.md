@@ -42,6 +42,14 @@ Ablauffrist ist nur eine konservative Sicherheitsrichtlinie, keine Zusage der
 Bank über TAN-freien Zugriff. Ohne Bankzugriff kann ein früherer bankseitiger
 Widerruf nicht erkannt werden.
 
+Nach einem abgeschlossenen manuellen Vorgang gilt standardmäßig eine lokale
+Maximalfrist von 90 Tagen. Der Datenbank-Einstellungswert
+`fints_authorization_max_age_days` begrenzt sie auf 1–365 Tage; die Frist wird
+beim nächsten erfolgreichen manuellen Vorgang neu gesetzt. MQTT und Status-API
+erkennen das Erreichen dieser Grenze ohne Bankzugriff als
+`required` / `local_authorization_expired`. Eine laufende Challenge hat
+stattdessen eine eigene kurze Frist und ist noch keine abgeschlossene Freigabe.
+
 ## MQTT-Freigabestatus
 
 Nach Aktivierung von MQTT in den Einstellungen wird unabhängig vom Saldoexport
@@ -193,6 +201,27 @@ gesichert werden. `APP_DEBUG=false` vermeidet ausführliche Produktionsfehler un
 Debugprotokolle. Debugbetrieb nicht mit echten Bankdaten verwenden.
 
 ## Entwicklung
+
+### Regressionstests
+
+Nach Installation der Composer-Abhängigkeiten führen `composer test` im
+Anwendungsverzeichnis die PHP-Regressionstests und `composer test:ui` die
+JavaScript-Prüfungen aus. Letztere benötigen Node.js in der Entwicklungsumgebung;
+der PHP-Produktionscontainer benötigt Node.js nicht. Es wird kein zusätzliches
+Testframework verwendet. Die lokalen Broker-Protokolltests benötigen Linux/POSIX
+und PHP-CLI mit `pcntl`/`posix`; die Datenbanktests benötigen `pdo_sqlite` und
+`mbstring`. Diese Testvoraussetzungen werden nicht dem Produktionsimage
+hinzugefügt.
+
+Die Tests verwenden synthetische Bankantworten, temporäre SQLite-Datenbanken und
+einen lokalen MQTT-Testbroker, keine echten Bankzugänge. Prüfschwerpunkte sind
+Challenge-Vermeidung, Freigabe-Fortsetzung, Ablauf, Wiederholungen, CSRF,
+Finanzdatenintegrität und MQTT-Zustellung. Vor Migration einer produktiven
+Datenbank das gesamte Datenvolume sichern. Es erfolgt keine automatische
+Löschung zweifelhafter Altbuchungen oder verwaister Altdaten.
+
+Agentenzuständigkeiten, aktuelle Ergebnisse und verbleibende Grenzen stehen in
+`REVIEW_PLAN.md`.
 
 ### Lokal entwickeln
 

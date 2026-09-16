@@ -66,6 +66,13 @@ try {
         && $saved['currency'] === 'USD', 'Missing balances and currency preserve good data');
     $db->upsertAccount($bank, ['account_number' => '1', 'balance' => 0]);
     checkDatabase((float) $db->getAccountById($account)['balance'] === 0.0, 'Explicit zero balance saved');
+    $db->updateAccountBalance($account, 100, '2026-09-01 10:00:00', 'SEK');
+    checkDatabase($db->getAccountById($account)['currency'] === 'SEK'
+        && (float) $db->getAccountById($account)['balance'] === 100.0, 'Successful saldo stores actual bank currency');
+    $db->updateAccountBalance($account, 110);
+    checkDatabase($db->getAccountById($account)['currency'] === 'SEK', 'Legacy balance updater preserves known currency');
+    $db->upsertAccount($bank, ['account_number' => '1', 'account_name' => 'Discovered account']);
+    checkDatabase($db->getAccountById($account)['currency'] === 'SEK', 'Metadata-only discovery does not relabel foreign currency');
 
     $base = ['booking_date' => '2026-09-01', 'valuta_date' => '2026-09-01',
         'amount' => -10, 'currency' => 'EUR', 'name' => 'Merchant', 'description' => 'Payment'];
@@ -81,6 +88,10 @@ try {
     ];
     checkDatabase($db->saveTransactions($account, $strong)['new'] === 8, 'Different and recurring references preserved');
     checkDatabase($db->saveTransactions($account, array_reverse($strong))['new'] === 0, 'Strong reference replay idempotent');
+    checkDatabase($db->saveTransactions($account, $strong) === ['new' => 0, 'updated' => 0, 'skipped' => 8, 'total' => 8],
+        'Duplicate replays count as skipped, never as updates');
+    checkDatabase($db->saveTransactions($account, []) === ['new' => 0, 'updated' => 0, 'skipped' => 0, 'total' => 0],
+        'Empty import reports zero counters');
     checkDatabase($db->saveTransaction($account, array_replace($strong[0], ['description' => 'Enriched text'])) === 0,
         'Strong references take precedence over changed descriptive text');
     checkDatabase($db->saveTransactions($account, [$strong[0], $strong[0]])['new'] === 0, 'Repeated strong reference is one payment');
@@ -113,6 +124,14 @@ try {
         'Adopted legacy row cannot swallow another bank reference');
     checkDatabase($db->saveTransaction($legacyAccount, $adopt + ['transaction_id' => 'restored-bank-id']) === 0,
         'Adopted source reference remains idempotent');
+    $metadataAdoption = array_replace($base, ['description' => 'Adoption statistics']);
+    legacyTransaction($db, $legacyAccount, $metadataAdoption);
+    checkDatabase($db->saveTransactions($legacyAccount, [$metadataAdoption + ['transaction_id' => 'metadata-bank-id']])
+        === ['new' => 0, 'updated' => 1, 'skipped' => 0, 'total' => 1],
+        'Actual legacy source-ID metadata adoption counts as an update');
+    checkDatabase($db->saveTransactions($legacyAccount, [$metadataAdoption + ['transaction_id' => 'metadata-bank-id']])
+        === ['new' => 0, 'updated' => 0, 'skipped' => 1, 'total' => 1],
+        'Adopted metadata replay counts as skipped');
     checkDatabase($db->saveTransaction($legacyAccount, array_replace($base, ['description' => 'Different legacy payment'])) === 1,
         'Legacy coarse similarity does not discard new payments');
     $afterRegeneration = array_replace($base, ['description' => 'Legacy source after regeneration']);

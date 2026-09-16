@@ -86,6 +86,7 @@ uiCheck(str_contains($fixtures['bank'], 'Bankzugang freigeben'), 'Missing explic
 uiCheck(str_contains($fixtures['bank'], 'backgroundSyncToggle(10, 0)'), 'Background exclusion not reflected');
 uiCheck(!str_contains($fixtures['bank'], 'tan-manual-approval'), 'Legacy TAN toggle still present');
 uiCheck(!str_contains($fixtures['bank'], '90 Tage gültig'), 'False SCA guarantee remains');
+uiCheck(str_contains($fixtures['bank'], 'Lokale Freigabefrist (keine Bankgarantie)'), 'Authorization policy expiry must not claim bank guarantee');
 $settings = $view->fetch('settings.twig', ['settings' => ['mqtt_password' => 'must-not-be-rendered']]);
 uiCheck(!str_contains($settings, 'must-not-be-rendered'), 'Settings template rendered stored MQTT password');
 uiCheck(str_contains($settings, 'name="mqtt_password_clear"'), 'Missing explicit password clear checkbox');

@@ -21,7 +21,7 @@
 | AP-1/2 | `fints-backend` | FinTS-Service, API-Controller, Routen, Auto-Sync, neue Freigabeservices und Tests | Schutz/Operationen implementiert; abschließende API- und lokale Ablaufprüfungen laufen |
 | AP-3 | `mqtt-status` | MQTT-Service, MQTT-Cron, MQTT-Regressionstests | Status/Retry/ACK/Datenschutz getestet; Abgleich mit lokaler Ablaufrichtlinie läuft |
 | AP-4 | `authorization-ui` | Templates, Bank-/Konto-/Dashboard-Controller | Oberfläche, CSRF und Währungstrennung getestet; Beschriftung lokaler Ablaufgrenze in Arbeit |
-| AP-5 | `financial-integrity` | Datenbankservice, PayPal-Service und Regressionstests | In Arbeit: konservative Buchungsidentität, atomare Speicherung, Migration |
+| AP-5 | `financial-integrity` | Datenbankservice, PayPal-Service und Regressionstests | Abgeschlossen: 81 Integritäts-, 29 Freigabe- und 27 PayPal-Prüfungen bestanden |
 | AP-6 | Hauptagent / `security-audit` | Konfiguration, Dokumentation, Sicherheitsreview, Regressionsergebnisse | CSRF-Befund behoben; Abschlussreview ausstehend |
 
 Dateien haben jeweils genau einen schreibenden Verantwortlichen. Änderungen an
@@ -93,6 +93,12 @@ gemeinsamen Schnittstellen werden vor der Umsetzung abgestimmt.
 - Das Sicherheitsreview hat nach dem CSRF-Fix keine weiteren Sicherheitslücken
   in den geprüften neuen Freigabeänderungen gemeldet. Dies ist kein Nachweis,
   dass bestehende Zugangsdatenhaltung oder fehlende Benutzeranmeldung sicher sind.
+- AP-5 abgeschlossen: referenzbasierte Identität, vollständiger Fallback mit
+  Vorkommensanzahl, konservative Legacy-Zuordnung, atomare Depot-/Umsatzimporte,
+  Währungserhalt und echte Teilfehler bei PayPal. Übersprungene Duplikate werden
+  als `skipped` gezählt, nicht als `updated`; tatsächliche Metadatenübernahmen
+  zählen als Updates. 81 Integritäts-, 29 lokale Ablauf- und 27 PayPal-Checks
+  bestanden, PHP-Syntax und Whitespace geprüft.
 
 ## Abnahmekriterien
 
@@ -110,3 +116,35 @@ gemeinsamen Schnittstellen werden vor der Umsetzung abgestimmt.
 - [ ] Fehlgeschlagener Depotimport erhält den bisherigen Bestand.
 - [ ] PayPal-only funktioniert ohne FinTS-Produkt-ID.
 - [ ] Dokumentation, Tests und unabhängige Validierung abgeschlossen.
+
+## Abschlussreview: Nacharbeiten
+
+Das unabhängige Code-Review hat folgende Integrationsregressionen identifiziert.
+Sie werden vor Abschluss behoben, nicht als erledigt vorausgesetzt:
+
+| Befund | Auftrag | Verantwortlich | Status |
+| --- | --- | --- | --- |
+| Manueller Abruf bisher nur letzte 30 Tage | Konto und gewählten Zeitraum ausdrücklich an Freigabe übergeben und durch TAN-Fortsetzungen erhalten | `fints-backend`, `authorization-ui` | In Arbeit |
+| Saldo-Währung bei manueller Speicherung verloren | Tatsächliche Bankwährung zusammen mit erfolgreichem Saldo speichern | `fints-backend` | In Arbeit |
+| Leere MT940-Antwort nach TAN ohne CAMT-Fallback | Format-/Fallbackzustand im manuellen Vorgang fortsetzen | `fints-backend` | In Arbeit |
+| Broker verliert retained Daten, lokale Hashes bleiben | Begrenzte periodische Neuveröffentlichung von Status **und** Discovery | `mqtt-status` | In Arbeit |
+| Challenge-Ablauf ohne Browser und ohne Auto-Sync | MQTT-Lauf aktualisiert lokale abgelaufene Vorgänge ohne Bankzugriff | `fints-backend`, `mqtt-status` | In Arbeit |
+| Zugangsdatenänderung während eines Vorgangs | Bankbezogene Sperre und lokale Invalidierung statt Verwendung gemischter Zugangsdaten | `fints-backend` | In Arbeit |
+
+Kontrollierte Wiederveröffentlichung eines retained Zustands ist kein neues
+Benachrichtigungsereignis. Consumer sollten Benachrichtigungen an tatsächliche
+Statuswechsel binden.
+
+### Prüfgrenzen im aktuellen Agentenlauf
+
+- Der MQTT-Agent konnte die ursprünglichen Protokolltests ausführen. Die später
+  ergänzten Integrationsfälle für MQTT-only-Challenge-Ablauf und periodische
+  Wiederankündigung benötigen noch einen vollständigen Durchlauf in einer
+  Umgebung mit erlaubtem System-Temp-Zugriff. Die Testdateien verwenden
+  `sys_get_temp_dir()`; temporäre Repository-Dateien werden nicht ausgeliefert.
+- Artefaktfreie MQTT-Grund-/Payload-Prüfungen laufen separat über
+  `app/tests/mqtt-reasons.php`.
+- Die automatisierte Review-Integration meldete in Agentenläufen einen nicht
+  verfügbaren Modellnamen. Das unabhängige Code-Review erfolgte deshalb über
+  einen separaten Reviewer. CodeQL deckt die PHP-Änderungen nicht ab; ein
+  JavaScript-Scan allein ist keine Sicherheitsfreigabe der gesamten App.

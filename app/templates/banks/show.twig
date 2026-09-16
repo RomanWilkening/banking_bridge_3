@@ -135,12 +135,12 @@
                 Freigabe erforderlich seit: <span x-text="formatDate(authorization.required_at)"></span>
             </p>
             <p class="text-xs text-gray-500" x-show="authorization.expires_at">
-                Von der Bank gemeldeter Ablauf: <span x-text="formatDate(authorization.expires_at)"></span>
+                Lokale Freigabefrist (keine Bankgarantie): <span x-text="formatDate(authorization.expires_at)"></span>
             </p>
             <p class="text-xs text-gray-500" x-show="operationExpiresAt">
                 Aktuelle TAN-Anfrage läuft ab: <span x-text="formatDate(operationExpiresAt)"></span>
             </p>
-            <p class="mt-2 text-sm text-gray-500">Normale Abrufe und Hintergrund-Synchronisierung fordern niemals automatisch eine TAN an. Eine lokal gespeicherte technische Session garantiert keine Bankfreigabe oder feste Gültigkeitsdauer. Gespeicherte Salden können veraltet sein.</p>
+            <p class="mt-2 text-sm text-gray-500">Normale Abrufe und Hintergrund-Synchronisierung fordern niemals automatisch eine TAN an. Die lokale Freigabefrist ist eine Sicherheitsrichtlinie dieser Anwendung, keine von der Bank garantierte Gültigkeit. Auch eine gespeicherte technische Session belegt keine Freigabe. Gespeicherte Salden können veraltet sein.</p>
             <button @click="authorize" :disabled="busy" class="mt-3 rounded-md bg-primary-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">
                 Bankzugang freigeben
             </button>
@@ -178,6 +178,10 @@
                                 <div class="loading-spinner" style="width: 40px; height: 40px; border-width: 4px;"></div>
                             </div>
                             <p class="mt-4 text-sm text-gray-600" x-text="pollingStatus"></p>
+                            <button x-show="tanRequest?.automated_polling_allowed !== true" @click="checkDecoupledStatus(true)" :disabled="requestBusy"
+                                    class="mt-3 rounded-md border px-3 py-2 text-sm">
+                                Bestätigung jetzt prüfen
+                            </button>
                             <p class="mt-2 text-xs text-gray-400">Die Seite aktualisiert sich automatisch nach der Bestätigung</p>
                         </div>
                         
@@ -1077,6 +1081,8 @@ function bankDetails(bankId) {
         pollAttempts: 0,
         operationId: null,
         operationExpiresAt: null,
+        authorizationRequestId: null,
+        nextPollAt: 0,
 
         get busy() {
             return this.loading || this.syncingBalances || this.syncingAll || this.resettingSession || this.requestBusy || this.manualAuthorization || this.authorization.status === 'pending';
@@ -1107,10 +1113,10 @@ function bankDetails(bankId) {
             this.requestBusy = true;
             this.message = null;
             try {
-                const requestId = Array.from(crypto.getRandomValues(new Uint8Array(24)), byte => byte.toString(16).padStart(2, '0')).join('');
+                this.authorizationRequestId ??= Array.from(crypto.getRandomValues(new Uint8Array(24)), byte => byte.toString(16).padStart(2, '0')).join('');
                 const response = await fetch(`/api/banks/${this.bankId}/authorize`, {
                     method: 'POST', headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ request_id: requestId })
+                    body: JSON.stringify({ request_id: this.authorizationRequestId })
                 });
                 const data = await response.json();
                 this.handleAuthorizationResponse(data);
@@ -1144,7 +1150,10 @@ function bankDetails(bankId) {
 
         handleAuthorizationResponse(data) {
             if (data.authorization) this.authorization = data.authorization;
-            if (data.operation_id) this.operationId = data.operation_id;
+            if (data.operation_id) {
+                if (this.operationId !== data.operation_id) this.pollAttempts = 0;
+                this.operationId = data.operation_id;
+            }
             if (data.operation_expires_at) this.operationExpiresAt = data.operation_expires_at;
             if (data.needs_tan && this.manualAuthorization) {
                 this.tanRequest = data.tan_request;
@@ -1153,11 +1162,13 @@ function bankDetails(bankId) {
                 this.authorization.status = 'pending';
                 this.tanInput = '';
                 this.stopDecoupledPolling();
+                this.nextPollAt = Date.now() + Math.max(3, Number(this.tanRequest?.poll_interval) || 3) * 1000;
                 if (this.isDecoupled) this.startDecoupledPolling();
             } else {
                 this.stopDecoupledPolling();
                 this.showTanModal = false;
                 this.manualAuthorization = false;
+                this.authorizationRequestId = null;
                 const warning = safeSyncWarning(data);
                 this.message = { type: data.success && !warning ? 'success' : 'error', text: warning || data.message || (data.success ? 'Freigabe und Kontenabruf abgeschlossen.' : 'Freigabe fehlgeschlagen.') };
                 if (data.success && !warning) setTimeout(() => location.reload(), 1500);
@@ -1293,6 +1304,10 @@ function bankDetails(bankId) {
         startDecoupledPolling() {
             if (!this.manualAuthorization) return;
             this.stopDecoupledPolling();
+            if (this.tanRequest?.automated_polling_allowed !== true) {
+                this.pollingStatus = 'Automatische Prüfung ist für dieses Verfahren nicht erlaubt. Nach Bestätigung in der App bitte „Bestätigung jetzt prüfen“ wählen.';
+                return;
+            }
             this.pollingStatus = 'Warte auf Bestätigung in der Banking-App...';
             const delay = Math.max(3, Number(this.tanRequest?.poll_interval) || 3) * 1000;
             this.pollingInterval = setInterval(() => this.checkDecoupledStatus(), delay);
@@ -1305,15 +1320,21 @@ function bankDetails(bankId) {
             }
         },
 
-        async checkDecoupledStatus() {
+        async checkDecoupledStatus(manual = false) {
             if (!this.manualAuthorization || this.requestBusy) return;
+            if (!manual && this.tanRequest?.automated_polling_allowed !== true) return;
             const expires = utcDate(this.operationExpiresAt);
             if (expires && expires.getTime() <= Date.now()) {
                 this.stopDecoupledPolling();
                 this.pollingStatus = 'Freigabe abgelaufen. Bitte abbrechen und bei Bedarf ausdrücklich neu starten.';
                 return;
             }
-            if (++this.pollAttempts > 100) {
+            if (Date.now() < this.nextPollAt) {
+                this.pollingStatus = 'Bitte die von der Bank vorgegebene Wartezeit abwarten und anschließend erneut prüfen.';
+                return;
+            }
+            const bankLimit = Number(this.tanRequest?.max_polls) || 100;
+            if (++this.pollAttempts > Math.min(100, bankLimit)) {
                 this.stopDecoupledPolling();
                 this.pollingStatus = 'Zeitlimit erreicht. Bitte Freigabe abbrechen oder auf der Bankseite fortsetzen.';
                 return;
@@ -1390,6 +1411,7 @@ function bankDetails(bankId) {
                 this.showTanModal = false;
                 this.manualAuthorization = false;
                 this.isDecoupled = false;
+                this.authorizationRequestId = null;
                 this.message = { type: 'success', text: 'Freigabe abgebrochen. Gespeicherte Kontodaten bleiben erhalten.' };
                 await this.refreshAuthorization();
             } catch (error) {

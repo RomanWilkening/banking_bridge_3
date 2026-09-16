@@ -14,6 +14,7 @@ require __DIR__ . '/../vendor/autoload.php';
 
 use App\Services\DatabaseService;
 use App\Services\MqttService;
+use App\Services\AuthorizationService;
 use Monolog\Logger;
 use Monolog\Handler\StreamHandler;
 
@@ -53,6 +54,10 @@ try {
     }
     
     $db = new DatabaseService($dbPath);
+
+    // Expire abandoned local challenges even with bank synchronization disabled.
+    // This sweep only touches local operation state and never constructs a bank client.
+    AuthorizationService::expirePendingOperations($db);
     
     // Check if MQTT is enabled
     $mqttEnabled = $db->getSetting('mqtt_enabled', '0') === '1';

@@ -982,12 +982,13 @@ class DatabaseService
 
     /**
      * Save multiple transactions
-     * Returns array with counts: ['new' => X, 'updated' => Y, 'total' => Z]
+     * Reports inserted rows, actual metadata updates, skipped rows, and incoming total.
      */
     public function saveTransactions(int $accountId, array $transactions): array
     {
         return $this->financialTransaction(function () use ($accountId, $transactions): array {
             $newCount = 0;
+            $updatedCount = 0;
             $occurrences = [];
             $existingStmt = $this->pdo->prepare("
                 SELECT * FROM transactions
@@ -1023,6 +1024,7 @@ class DatabaseService
                 if ($legacyMatch !== null) {
                     $stmt = $this->pdo->prepare("UPDATE transactions SET source_transaction_id = ? WHERE id = ?");
                     $stmt->execute([$data['source_transaction_id'], $legacyMatch]);
+                    $updatedCount += $stmt->rowCount();
                     continue;
                 }
                 $transactionId = $identity;
@@ -1039,7 +1041,12 @@ class DatabaseService
                 $stmt->execute(array_merge([$accountId, $transactionId], array_values($data)));
                 $newCount++;
             }
-            return ['new' => $newCount, 'updated' => count($transactions) - $newCount, 'total' => count($transactions)];
+            return [
+                'new' => $newCount,
+                'updated' => $updatedCount,
+                'skipped' => count($transactions) - $newCount - $updatedCount,
+                'total' => count($transactions),
+            ];
         });
     }
 
@@ -1231,14 +1238,14 @@ class DatabaseService
         });
     }
 
-    public function updateAccountBalance(int $accountId, float $balance, ?string $balanceDate = null): bool
+    public function updateAccountBalance(int $accountId, float $balance, ?string $balanceDate = null, ?string $currency = null): bool
     {
         $stmt = $this->pdo->prepare("
             UPDATE accounts 
-            SET balance = ?, balance_date = ?, updated_at = CURRENT_TIMESTAMP
+            SET balance = ?, balance_date = ?, currency = COALESCE(?, currency), updated_at = CURRENT_TIMESTAMP
             WHERE id = ?
         ");
-        return $stmt->execute([$balance, $balanceDate ?? gmdate('Y-m-d H:i:s'), $accountId]);
+        return $stmt->execute([$balance, $balanceDate ?? gmdate('Y-m-d H:i:s'), $currency, $accountId]);
     }
 
     // Bank Capabilities Methods

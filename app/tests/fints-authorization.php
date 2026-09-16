@@ -238,6 +238,15 @@ try {
     verify(OfflineFinTs::$events === $before, 'Completed duplicate made traffic');
     $auth->blocked($bank);
     verify($db->getBankAuthorizationState($bank)['status'] === 'authorized', 'Background block erased factual successful auth');
+    $authenticatedAt = $db->getBankAuthorizationState($bank)['authenticated_at'];
+    $db->getPdo()->exec("UPDATE bank_authorization SET expires_at = '2000-01-01T00:00:00Z' WHERE bank_id = " . $bank);
+    $before = OfflineFinTs::$events;
+    $expiredState = $auth->state($bank, 'browser-a');
+    verify($expiredState['authorization']['status'] === 'required'
+        && $expiredState['authorization']['reason'] === 'local_authorization_expired', 'Local policy deadline did not require authorization');
+    verify($expiredState['authorization']['authenticated_at'] === $authenticatedAt, 'Policy expiry erased authentication history');
+    verify($db->getFinTSSession($bank) !== null && OfflineFinTs::$events === $before,
+        'Local authorization expiry was confused with technical session expiry or made a bank request');
 
     $result = $auth->authorize($bank, 'browser-a', 'request-cancel');
     $before = OfflineFinTs::$events;
@@ -324,6 +333,20 @@ try {
     verify($invalid->getStatusCode() === 400, 'Ambiguous account preference accepted');
     $missingKey = $api->authorizeBank($request->withParsedBody([]), new \Slim\Psr7\Response(), ['id' => $bank]);
     verify($missingKey->getStatusCode() === 400, 'Authorize accepted request without idempotency key');
+    $secondBank = $db->createBank(['name' => 'Offline', 'bank_code' => '00000000', 'fints_url' => 'https://invalid.invalid',
+        'username' => 'second-fixture', 'password' => 'fixture']);
+    $db->upsertAccount($secondBank, ['account_number' => '1234', 'account_name' => 'Separate connection']);
+    $auto = $api->runAutoSync($request, new \Slim\Psr7\Response());
+    $autoData = json_decode((string) $auto->getBody(), true);
+    verify(count($autoData['results']) === 2 && isset($autoData['results'][$bank], $autoData['results'][$secondBank]),
+        'Connections with matching BLZ or names were aggregated');
+    verify($db->getBankAuthorizationState($bank)['status'] === 'pending'
+        && $db->getBankAuthorizationState($secondBank)['status'] === 'required', 'Connection authorization state leaked across bank IDs');
+    verify(OfflineFinTs::$events === $before, 'Connection-isolated auto sync performed FinTS traffic');
+    $auth->authorize($secondBank, 'browser-a', 'second-connection-operation');
+    $db->deleteBank($secondBank);
+    verify((int) $db->getPdo()->query('SELECT COUNT(*) FROM fints_authorization_operations')->fetchColumn() === 1,
+        'Deleting a connection retained its pending dialog or deleted another connection operation');
 
     echo "FinTS authorization regression tests passed (offline; no bank requests).\n";
 } finally {

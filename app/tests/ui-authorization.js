@@ -73,7 +73,7 @@ async function run() {
     assert(!bank.calls.some(call => call.url.endsWith('/authorize')));
     const pending = { success: false, needs_tan: true, operation_id: 'operation-1',
         operation_expires_at: '2099-01-01T00:00:00Z', authorization: { status: 'pending' },
-        tan_request: { is_decoupled: true, poll_interval: 5, challenge: 'Confirm app' } };
+        tan_request: { is_decoupled: true, poll_interval: 5, max_polls: 20, automated_polling_allowed: true, challenge: 'Confirm app' } };
     bank.replies.push(pending, pending);
     await state.authorize();
     assert.equal(state.showTanModal, true);
@@ -85,7 +85,8 @@ async function run() {
     const count = bank.calls.length;
     await state.authorize();
     assert.equal(bank.calls.length, count, 'Duplicate authorize click should be ignored');
-    bank.replies.push({ ...pending, tan_request: { is_decoupled: false, challenge: 'Enter TAN' } });
+    bank.replies.push({ ...pending, operation_id: 'operation-2', tan_request: { is_decoupled: false, challenge: 'Enter TAN' } });
+    state.nextPollAt = 0;
     await state.checkDecoupledStatus();
     assert.equal(bank.timers.size, 0, 'Changing TAN method must stop push polling');
     assert.equal(state.isDecoupled, false);
@@ -98,7 +99,7 @@ async function run() {
     assert.equal(state.manualAuthorization, false);
     assert.equal(state.tanInput, '');
     const submission = bank.calls.find(call => call.url.endsWith('/tan'));
-    assert.equal(JSON.parse(submission.body).operation_id, 'operation-1');
+    assert.equal(JSON.parse(submission.body).operation_id, 'operation-2', 'New challenge token must replace old token');
 
     // Reloading/restoring state never starts a new bank dialog; resume is explicit.
     const restored = bank.context.bankDetails(1);
@@ -127,6 +128,7 @@ async function run() {
     assert.equal(toggle.saving, false);
     const expired = bank.context.bankDetails(1);
     expired.manualAuthorization = true;
+    expired.tanRequest = { automated_polling_allowed: true };
     expired.operationExpiresAt = '2000-01-01T00:00:00Z';
     const beforeExpiredPoll = bank.calls.length;
     await expired.checkDecoupledStatus();
@@ -136,7 +138,7 @@ async function run() {
     const network = bank.context.bankDetails(1);
     network.manualAuthorization = true;
     network.operationId = 'operation-1';
-    network.tanRequest = { is_decoupled: true };
+    network.tanRequest = { is_decoupled: true, automated_polling_allowed: true };
     network.startDecoupledPolling();
     bank.replies.push(new Error('offline'));
     await network.checkDecoupledStatus();
@@ -147,6 +149,32 @@ async function run() {
     await network.closeModal();
     assert.equal(network.showTanModal, true, 'Failed cancellation must not pretend success');
     assert.equal(network.message.type, 'error');
+    const uncertain = bank.context.bankDetails(1);
+    bank.replies.push(new Error('response lost'), new Error('status unavailable'));
+    await uncertain.authorize();
+    const firstRequestId = uncertain.authorizationRequestId;
+    assert(firstRequestId);
+    bank.replies.push({ success: true, authorization: { status: 'authorized' } },
+        { success: true, authorization: { status: 'authorized' } });
+    await uncertain.authorize();
+    const authorizations = bank.calls.filter(call => call.url.endsWith('/authorize'));
+    assert.equal(JSON.parse(authorizations.at(-1).body).request_id, firstRequestId, 'Uncertain request retries must keep idempotency key');
+    assert.equal(uncertain.authorizationRequestId, null, 'Terminal response releases idempotency key');
+    const manualPoll = bank.context.bankDetails(1);
+    manualPoll.manualAuthorization = true;
+    manualPoll.handleAuthorizationResponse({ ...pending, tan_request: { is_decoupled: true, automated_polling_allowed: false, max_polls: 1 } });
+    assert.equal(bank.timers.size, 0, 'Disallowed automated polling must not create timers');
+    const beforeManual = bank.calls.length;
+    await manualPoll.checkDecoupledStatus();
+    await manualPoll.checkDecoupledStatus(true);
+    assert.equal(bank.calls.length, beforeManual, 'Manual check must respect bank minimum delay');
+    manualPoll.nextPollAt = 0;
+    bank.replies.push({ ...pending, tan_request: { is_decoupled: true, automated_polling_allowed: false, max_polls: 1 } });
+    await manualPoll.checkDecoupledStatus(true);
+    assert.equal(bank.calls.length, beforeManual + 1);
+    manualPoll.nextPollAt = 0;
+    await manualPoll.checkDecoupledStatus(true);
+    assert.equal(bank.calls.length, beforeManual + 1, 'Bank maximum check count must be respected');
     console.log('PASS: rendered JavaScript syntax, safe sync isolation, explicit TAN/push/resume/cancel, UTC, CSRF and background toggle');
 }
 
