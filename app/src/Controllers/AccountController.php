@@ -28,6 +28,7 @@ class AccountController
         if (!$bank) {
             return $response->withStatus(404);
         }
+        $bank['authorization'] = $this->db->getBankAuthorizationState((int) $bank['id']);
 
         $isDepot = ($account['account_type'] ?? '') === 'depot';
         

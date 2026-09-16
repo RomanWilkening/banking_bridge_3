@@ -1,0 +1,12 @@
+{% set authorization = bank.authorization ?? {} %}
+{% set status = authorization.status ?? 'unknown' %}
+{% set labels = {'unknown': 'Freigabestatus unbekannt', 'authorized': 'Bankzugang freigegeben', 'required': 'Bankfreigabe erforderlich', 'pending': 'Bankfreigabe ausstehend', 'error': 'Fehler beim Bankzugang'} %}
+<p class="text-sm {% if status == 'authorized' %}text-green-700{% elseif status == 'error' %}text-red-700{% else %}text-amber-700{% endif %}">
+    {{ labels[status] ?? labels.unknown }}
+</p>
+{% if authorization.reason %}
+<p class="text-xs text-gray-600">{{ authorization.reason }}</p>
+{% endif %}
+{% if status != 'authorized' %}
+<p class="text-xs text-gray-500">Gespeicherte Daten können veraltet sein. Keine automatische TAN-Anforderung.</p>
+{% endif %}

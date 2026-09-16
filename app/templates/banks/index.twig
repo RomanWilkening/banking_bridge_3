@@ -28,6 +28,7 @@
                     <div class="ml-4 flex-1">
                         <h3 class="text-lg font-medium text-gray-900">{{ bank.name }}</h3>
                         <p class="text-sm text-gray-500">BLZ: {{ bank.bank_code }}</p>
+                        {% include 'banks/authorization-status.twig' with {bank: bank} only %}
                     </div>
                 </div>
 

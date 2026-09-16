@@ -26,6 +26,177 @@ class FinTSService
     private ?FinTs $finTs = null;
     private array $config = [];
     private ?string $productId = null;
+    private bool $explicitAuthorization = false;
+
+    public const BACKGROUND_BLOCK_REASON = 'automatic_tan_prevention_unavailable';
+
+    public static function backgroundBlocked(): array
+    {
+        return [
+            'success' => false,
+            'blocked' => true,
+            'needs_authorization' => true,
+            'needs_tan' => false,
+            'reason' => self::BACKGROUND_BLOCK_REASON,
+            'background_sync_available' => false,
+            'message' => 'Automatischer FinTS-Abruf gesperrt: Die Bibliothek kann TAN-Anforderungen nicht vor dem Versand verhindern. Bitte ausdrücklich freigeben.',
+        ];
+    }
+
+    /**
+     * Only AuthorizationService calls this, under a bank lock with a durable operation.
+     * phpFinTS login()/execute() send HKTAN before needsTan() can be inspected.
+     */
+    public function authorizeSync(array $bankConfig, array $accounts, ?string $session, ?array $continuation, ?string $tan, bool $poll, callable $registerAccounts): array
+    {
+        $this->explicitAuthorization = true;
+        $context = $continuation['context'] ?? [
+            'stage' => 'login', 'accounts' => $accounts, 'sepa' => [], 'jobs' => [],
+            'results' => ['balances' => [], 'transactions' => [], 'holdings' => [], 'errors' => []],
+        ];
+        try {
+            $this->finTs = $this->createClient($this->createOptions($bankConfig), $this->createCredentials($bankConfig),
+                $continuation['persisted_instance'] ?? $session);
+            if ($continuation === null && $session === null) {
+                $this->selectTanMode();
+            }
+
+            $action = null;
+            if ($continuation !== null) {
+                $action = unserialize(base64_decode($continuation['persisted_action'], true));
+                if (!$action instanceof BaseAction) {
+                    throw new \RuntimeException('Invalid pending action');
+                }
+                if ($poll) {
+                    $this->finTs->checkDecoupledSubmission($action);
+                } else {
+                    $this->finTs->submitTan($action, $tan ?? '');
+                }
+            }
+            while (true) {
+                $stage = $context['stage'];
+                if ($action === null) {
+                    if ($stage === 'login') {
+                        $action = $this->finTs->login();
+                    } elseif ($stage === 'accounts') {
+                        $action = GetSEPAAccounts::create();
+                        $this->finTs->execute($action);
+                    } else {
+                        if (empty($context['jobs'])) {
+                            return [
+                                'success' => true, 'results' => $context['results'],
+                                'persisted_instance' => $this->persistAfterClose(),
+                            ];
+                        }
+                        $job = $context['jobs'][0];
+                        $account = $context['sepa'][$job['sepa']];
+                        if ($job['type'] === 'transactions') {
+                            $result = $this->fetchTransactionsInternal($account, new \DateTime('-30 days'), new \DateTime());
+                            if (!empty($result['needs_tan'])) {
+                                $pendingAction = unserialize(base64_decode($result['persisted_action'], true));
+                                $result['continuation'] = ['context' => $context,
+                                    'persisted_instance' => $result['persisted_instance'],
+                                    'persisted_action' => $result['persisted_action'],
+                                    'challenge_key' => hash('sha256', $pendingAction->getTanRequest()->getProcessId())];
+                                $result['results'] = $context['results'];
+                                return $result;
+                            }
+                            if ($result['success']) {
+                                $context['results']['transactions'][$job['id']] = $result['transactions'];
+                            } else {
+                                $context['results']['errors'][] = ['account_id' => $job['id'], 'error' => 'transactions_failed'];
+                            }
+                            array_shift($context['jobs']);
+                            continue;
+                        }
+                        $action = $job['type'] === 'holdings' ? GetDepotAufstellung::create($account) : GetBalance::create($account);
+                        $this->finTs->execute($action);
+                    }
+                }
+                if ($action->needsTan()) {
+                    $pending = [
+                        'context' => $context,
+                        'persisted_instance' => $this->finTs->persist(),
+                        'persisted_action' => base64_encode(serialize($action)),
+                        'challenge_key' => hash('sha256', $action->getTanRequest()->getProcessId()),
+                    ];
+                    return ['success' => false, 'needs_tan' => true, 'tan_request' => $this->extractTanRequest($action),
+                        'continuation' => $pending, 'results' => $context['results']];
+                }
+                if (!$action->isDone()) {
+                    throw new \RuntimeException('Incomplete FinTS action');
+                }
+                if ($stage === 'login') {
+                    $context['stage'] = 'accounts';
+                } elseif ($stage === 'accounts') {
+                    $context['sepa'] = $action->getAccounts();
+                    $discovered = [];
+                    foreach ($context['sepa'] as $sepa) {
+                        $discovered[] = [
+                            'account_number' => $sepa->getAccountNumber(), 'iban' => $sepa->getIban(),
+                            'bic' => $sepa->getBic(), 'sub_account' => $sepa->getSubAccount(),
+                            'account_type' => $this->detectAccountType($sepa),
+                            'account_name' => 'Konto ' . substr($sepa->getIban() ?: $sepa->getAccountNumber(), -4),
+                        ];
+                    }
+                    $context['accounts'] = $registerAccounts($discovered);
+                    foreach ($context['accounts'] as $dbAccount) {
+                        $match = $this->findMatchingSepaAccount($context['sepa'], $dbAccount);
+                        if ($match === null) {
+                            $context['results']['errors'][] = ['account_id' => $dbAccount['id'], 'error' => 'account_not_found'];
+                            continue;
+                        }
+                        $index = array_search($match, $context['sepa'], true);
+                        $types = ($dbAccount['account_type'] ?? 'checking') === 'depot' ? ['holdings'] : ['balances', 'transactions'];
+                        foreach ($types as $type) {
+                            $context['jobs'][] = ['id' => (int) $dbAccount['id'], 'sepa' => $index, 'type' => $type];
+                        }
+                    }
+                    $context['stage'] = 'jobs';
+                } else {
+                    $job = array_shift($context['jobs']);
+                    if ($action instanceof GetBalance) {
+                        $balances = $action->getBalances();
+                        $first = reset($balances);
+                        $saldo = $first ? $first->getGebuchterSaldo() : null;
+                        if ($saldo === null) {
+                            $context['results']['errors'][] = ['account_id' => $job['id'], 'error' => 'balance_missing'];
+                        } else {
+                            $context['results']['balances'][$job['id']] = [
+                                'amount' => $saldo->getAmount(), 'currency' => $saldo->getCurrency(),
+                                'date' => $saldo->getTimestamp()?->format('Y-m-d H:i:s') ?? date('Y-m-d H:i:s'),
+                            ];
+                        }
+                    } elseif ($action instanceof GetDepotAufstellung) {
+                        $context['results']['holdings'][$job['id']] = $this->processDepotResult($action);
+                    } else {
+                        $result = $action instanceof GetStatementOfAccountXML
+                            ? $this->processTransactionsXMLResult($action) : $this->processTransactionsResult($action);
+                        if ($result['success']) {
+                            $context['results']['transactions'][$job['id']] = $result['transactions'];
+                        } else {
+                            $context['results']['errors'][] = ['account_id' => $job['id'], 'error' => 'transactions_failed'];
+                        }
+                    }
+                }
+                $action = null;
+            }
+        } catch (\Throwable $e) {
+            // Never replay an uncertain request or automatically open a fresh dialog.
+            $this->logger->warning('Explicit FinTS operation stopped', ['exception' => get_class($e)]);
+            return ['success' => false, 'reason' => 'fints_operation_failed',
+                'message' => 'FinTS-Vorgang fehlgeschlagen. Bitte erneut ausdrücklich freigeben.',
+                'results' => $context['results']];
+        } finally {
+            $this->explicitAuthorization = false;
+            $this->finTs = null;
+        }
+    }
+
+    protected function createClient(FinTsOptions $options, Credentials $credentials, ?string $persisted): FinTs
+    {
+        return FinTs::new($options, $credentials, $persisted);
+    }
 
     public function __construct(Logger $logger)
     {
@@ -70,6 +241,9 @@ class FinTSService
      */
     private function createOptions(array $bankConfig): FinTsOptions
     {
+        if (!$this->explicitAuthorization) {
+            throw new \RuntimeException(self::BACKGROUND_BLOCK_REASON);
+        }
         $options = new FinTsOptions();
         $options->url = $bankConfig['fints_url'];
         $options->bankCode = $bankConfig['bank_code'];
@@ -116,6 +290,9 @@ class FinTSService
      */
     public function testConnection(array $bankConfig): array
     {
+        if (!$this->explicitAuthorization) {
+            return self::backgroundBlocked();
+        }
         try {
             $this->init($bankConfig);
             
@@ -267,6 +444,9 @@ class FinTSService
      */
     public function getAccounts(array $bankConfig, ?string $persistedInstance = null): array
     {
+        if (!$this->explicitAuthorization) {
+            return self::backgroundBlocked();
+        }
         try {
             return $this->doGetAccounts($bankConfig, $persistedInstance);
         } catch (Exception $e) {
@@ -396,6 +576,9 @@ class FinTSService
      */
     public function fetchAccountBalances(array $bankConfig, ?string $persistedInstance = null): array
     {
+        if (!$this->explicitAuthorization) {
+            return self::backgroundBlocked();
+        }
         $this->logger->info('=== fetchAccountBalances START ===');
         
         try {
@@ -510,6 +693,9 @@ class FinTSService
      */
     public function syncAll(array $bankConfig, array $accountsFromDb, ?string $persistedInstance = null, ?array $perAccountFrom = null): array
     {
+        if (!$this->explicitAuthorization) {
+            return self::backgroundBlocked();
+        }
         $this->logger->info('=== syncAll START ===', [
             'accounts_count' => count($accountsFromDb),
             'has_persisted_instance' => $persistedInstance !== null,
@@ -878,6 +1064,9 @@ class FinTSService
                     $errors['MT940'] = $result['message'] ?? 'MT940 lieferte kein Ergebnis';
                 }
             } catch (\Throwable $e) {
+                if ($this->explicitAuthorization) {
+                    throw $e;
+                }
                 $errors['MT940'] = $e->getMessage();
             }
         }
@@ -894,6 +1083,9 @@ class FinTSService
                 }
                 $errors['CAMT'] = $result['message'] ?? 'CAMT lieferte kein Ergebnis';
             } catch (\Throwable $e) {
+                if ($this->explicitAuthorization) {
+                    throw $e;
+                }
                 $errors['CAMT'] = $e->getMessage();
             }
         }
@@ -973,6 +1165,9 @@ class FinTSService
      */
     public function submitTan(array $bankConfig, string $persistedInstance, string $persistedAction, string $tan, ?array $syncContext = null, ?array $syncAllContext = null): array
     {
+        if (!$this->explicitAuthorization) {
+            return self::backgroundBlocked();
+        }
         try {
             $options = $this->createOptions($bankConfig);
             $credentials = $this->createCredentials($bankConfig);
@@ -1199,11 +1394,15 @@ class FinTSService
             'challenge' => substr($challenge ?? '', 0, 100)
         ]);
         
+        $mode = $this->finTs->getSelectedTanMode();
         return [
             'challenge' => $challenge,
             'challenge_html' => method_exists($tanRequest, 'getChallengeHtml') ? $tanRequest->getChallengeHtml() : null,
             'tan_medium' => method_exists($tanRequest, 'getTanMediumName') ? $tanRequest->getTanMediumName() : null,
-            'is_decoupled' => $isDecoupled
+            'is_decoupled' => $isDecoupled,
+            'poll_interval' => $isDecoupled ? max(5, $mode->getFirstDecoupledCheckDelaySeconds(), $mode->getPeriodicDecoupledCheckDelaySeconds()) : 5,
+            'max_polls' => $isDecoupled ? $mode->getMaxDecoupledChecks() : 0,
+            'automated_polling_allowed' => $isDecoupled && $mode->allowsAutomatedPolling(),
         ];
     }
 
@@ -1220,6 +1419,9 @@ class FinTSService
      */
     public function checkDecoupledStatus(array $bankConfig, string $persistedInstance, string $persistedAction, ?array $syncContext = null, ?array $syncAllContext = null): array
     {
+        if (!$this->explicitAuthorization) {
+            return self::backgroundBlocked();
+        }
         try {
             $options = $this->createOptions($bankConfig);
             $credentials = $this->createCredentials($bankConfig);
@@ -1699,6 +1901,9 @@ class FinTSService
      */
     public function getTransactions(array $bankConfig, SEPAAccount $account, ?\DateTime $from = null, ?\DateTime $to = null, ?string $persistedInstance = null): array
     {
+        if (!$this->explicitAuthorization) {
+            return self::backgroundBlocked();
+        }
         try {
             $options = $this->createOptions($bankConfig);
             $credentials = $this->createCredentials($bankConfig);
@@ -1851,7 +2056,9 @@ class FinTSService
 
             // Ensure UPD allows HKCAZ for this account (some banks don't list it
             // in per-account HIUPD even though BPD supports CAMT)
-            $this->ensureCAMTSupportInUPD($account);
+            if (!$this->explicitAuthorization) {
+                $this->ensureCAMTSupportInUPD($account);
+            }
             
             $this->logger->info('Creating CAMT XML statement request');
             $getStatement = GetStatementOfAccountXML::create($account, $from, $to);
@@ -1874,6 +2081,9 @@ class FinTSService
             return $this->processTransactionsXMLResult($getStatement);
 
         } catch (\Throwable $e) {
+            if ($this->explicitAuthorization) {
+                throw $e;
+            }
             $this->logger->error('CAMT XML fetch failed', [
                 'error' => $e->getMessage(),
                 'class' => get_class($e)
@@ -1994,7 +2204,7 @@ class FinTSService
                 'transactions' => [],
                 'balance' => null,
                 'balance_date' => null,
-                'persisted_instance' => $this->persistAfterClose()
+                'persisted_instance' => $this->finTs->persist()
             ];
         }
         
@@ -2344,6 +2554,9 @@ class FinTSService
      */
     public function syncAccountTransactions(array $bankConfig, string $accountIdentifier, \DateTime $from, \DateTime $to, ?string $persistedInstance = null): array
     {
+        if (!$this->explicitAuthorization) {
+            return self::backgroundBlocked();
+        }
         $this->logger->info('=== syncAccountTransactions START ===', [
             'bank_code' => $bankConfig['bank_code'] ?? 'unknown',
             'account' => $accountIdentifier,
@@ -2600,6 +2813,9 @@ class FinTSService
      */
     public function getDepotHoldings(array $bankConfig, string $accountIdentifier, ?string $persistedInstance = null): array
     {
+        if (!$this->explicitAuthorization) {
+            return self::backgroundBlocked();
+        }
         $this->logger->info('=== getDepotHoldings START ===', ['account' => $accountIdentifier]);
         
         try {
@@ -2820,6 +3036,9 @@ class FinTSService
             
         } catch (\Throwable $e) {
             $this->logger->error('Error processing depot result', ['error' => $e->getMessage()]);
+            if ($this->explicitAuthorization) {
+                throw $e;
+            }
         }
         
         $this->logger->info('Processed depot holdings', ['count' => count($holdings)]);
@@ -2831,6 +3050,9 @@ class FinTSService
      */
     public function getTanModes(array $bankConfig): array
     {
+        if (!$this->explicitAuthorization) {
+            return self::backgroundBlocked();
+        }
         try {
             $this->init($bankConfig);
             $tanModes = $this->finTs->getTanModes();
@@ -2869,6 +3091,9 @@ class FinTSService
      */
     public function getBankCapabilities(array $bankConfig): array
     {
+        if (!$this->explicitAuthorization) {
+            return self::backgroundBlocked();
+        }
         try {
             $options = $this->createOptions($bankConfig);
             

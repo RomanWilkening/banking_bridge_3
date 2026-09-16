@@ -2,6 +2,35 @@
 
 Diese Dokumentation beschreibt alle verfügbaren API-Endpunkte der Banking Bridge Anwendung.
 
+## Änderung des Freigabemodells
+
+FinTS-Netzwerkzugriffe sind nur noch im ausdrücklich gestarteten manuellen
+Freigabevorgang erlaubt. In phpFinTS 3.7.0 kann schon der erste Login eine
+Push-Anforderung auslösen. Deshalb sind gewöhnliche Sync-Endpunkte und
+Hintergrundläufe konservativ gesperrt, **auch nach erfolgreicher Freigabe**.
+Gespeicherte Kontodaten bleiben lesbar. Die untenstehenden älteren erfolgreichen
+Sync-Beispiele beschreiben die Datenform, nicht eine Zusage automatischer Abrufe.
+
+- `GET /api/banks/{id}/accounts` liefert gespeicherte Konten, keinen Bankabruf.
+- `POST /api/banks/{id}/sync-all`, `/balances` sowie die Einzelkonto-Syncs
+  liefern den Sperrgrund statt eine Challenge anzufordern.
+- `POST /api/banks/{id}/authorize` startet bewusst einen vollständigen manuellen
+  Abruf, bei Bedarf einschließlich Kontenerkennung und TAN.
+- `GET /api/banks/{id}/authorization` und `/tan-session` liefern den aktuellen
+  fachlichen Freigabestatus; gespeicherte technische Sitzungen beweisen keine SCA.
+- `POST /api/banks/{id}/authorization/cancel` verwirft einen manuellen Vorgang
+  lokal, ohne einen neuen Bankdialog zu öffnen.
+
+Der Startauftrag muss eine stabile `request_id` (8–128 alphanumerische Zeichen,
+Unterstrich oder Bindestrich) enthalten. Bei Wiederholung dieselbe ID verwenden.
+Die Antwort enthält die `operation_id`, die bei TAN, Polling und Abbruch zusammen
+mit derselben Browser-Session zu senden ist. Ein anderer Browser kann eine
+laufende Freigabe nicht übernehmen. `needs_tan` bedeutet eine tatsächlich
+vorliegende Challenge; `blocked` bedeutet dagegen keine ausgeführte Bankanfrage.
+Bei einer neuen Challenge kann die `operation_id` wechseln; stets die zuletzt
+vom Server gelieferte ID für die nächste TAN beziehungsweise Statusabfrage
+verwenden.
+
 ## Inhaltsverzeichnis
 
 - [Übersicht](#übersicht)
@@ -71,6 +100,12 @@ Diese Dokumentation beschreibt alle verfügbaren API-Endpunkte der Banking Bridg
 ## Authentifizierung
 
 Die API verwendet derzeit keine Authentifizierung. Für den Produktiveinsatz sollte die Anwendung in einem geschützten Netzwerk betrieben oder ein Reverse Proxy mit Authentifizierung vorgeschaltet werden.
+
+Alle schreibenden Methoden verlangen zusätzlich das Session-gebundene CSRF-Token
+im Header `X-CSRF-Token` oder im Formularfeld `csrf_token`. Die Weboberfläche
+sendet es automatisch. Fehlende oder falsche Tokens führen vor jeder Änderung
+zu HTTP 403. Lesende v1-Endpunkte benötigen kein CSRF-Token. CSRF-Schutz ersetzt
+keine Zugriffskontrolle.
 
 ---
 
@@ -603,7 +638,8 @@ Ruft alle Konten einer Bank ab.
 
 **Endpunkt:** `GET /api/banks/{id}/accounts`
 
-**Hinweis:** Kann eine TAN-Anforderung zurückgeben (siehe [TAN-Verfahren](#tan-verfahren)).
+**Hinweis:** Liefert gespeicherte Konten. Neue Bankabfragen ausschließlich über
+den expliziten Freigabevorgang starten (siehe [TAN-Verfahren](#tan-verfahren)).
 
 **Antwort:**
 ```json
@@ -1068,7 +1104,9 @@ Aktiviert oder deaktiviert den MQTT-Export für ein Konto.
 
 ### TAN manuelle Freigabe
 
-Aktiviert oder deaktiviert die manuelle TAN-Freigabe für ein Konto. Wenn aktiviert, wird das Konto bei der automatischen Synchronisierung übersprungen und erfordert eine manuelle Bestätigung über die UI.
+Kompatibilitätsmerkmal für bestehende Installationen. Es aktiviert niemals
+automatische TAN-Anforderungen und wird nicht als vollständiger Kontoausschluss
+interpretiert. Das globale Verbot automatischer TAN gilt für beide Werte.
 
 **Endpunkt:** `POST /api/accounts/{id}/tan-manual-approval`
 
@@ -1090,15 +1128,26 @@ Aktiviert oder deaktiviert die manuelle TAN-Freigabe für ein Konto. Wenn aktivi
 
 ---
 
+### Teilnahme am Hintergrundabruf
+
+`POST /api/accounts/{id}/background-sync` akzeptiert `enabled` als JSON-Boolean.
+Die Antwort enthält `background_sync_enabled`. Dies ist ein unabhängiger
+Schalter; vorhandene `tan_manual_approval`-Werte werden nicht migriert oder
+umgedeutet. Der Standard ist aktiviert. Die konservative globale FinTS-Sperre
+bleibt unabhängig davon wirksam. Manuelle Freigaben sind keine Hintergrundläufe.
+
 ## Auto-Sync API
 
 ### Auto-Sync ausführen
 
-Führt eine automatische Synchronisierung aller Banken durch.
+Führt einen Hintergrundlauf aus. FinTS-Verbindungen werden ohne Netzwerkzugriff
+übersprungen; PayPal und MQTT werden unabhängig verarbeitet.
 
 **Endpunkt:** `POST /api/auto-sync/run`
 
-**Hinweis:** Banken, die eine TAN erfordern, sowie Konten mit aktivierter manueller TAN-Freigabe werden übersprungen.
+**Hinweis:** Die Kontoselektion verwendet `background_sync_enabled`, nicht das
+historische TAN-Merkmal. Übersprungene oder fehlgeschlagene Abrufe dürfen nicht
+als aktualisierte Daten interpretiert werden.
 
 **Antwort:**
 ```json
@@ -1148,7 +1197,9 @@ Ruft den Status der automatischen Synchronisierung ab.
 
 ## TAN-Verfahren
 
-Viele FinTS-Operationen können eine TAN erfordern. In diesem Fall wird folgende Antwort zurückgegeben:
+Nur ein ausdrücklich über `/authorize` gestarteter manueller Vorgang kann eine
+neue TAN anfordern. In diesem Fall wird neben der `operation_id` folgende
+Challenge-Struktur zurückgegeben:
 
 ```json
 {
@@ -1167,6 +1218,10 @@ Viele FinTS-Operationen können eine TAN erfordern. In diesem Fall wird folgende
 Bei decoupled TAN-Verfahren muss die Bestätigung in der Banking-App erfolgen. Der Status kann über folgenden Endpunkt abgefragt werden:
 
 **Endpunkt:** `POST /api/banks/{id}/decoupled`
+
+Im JSON-Body `operation_id` aus der Startantwort senden. Nicht schneller als das
+angegebene Poll-Intervall abfragen. Abbruch verwendet dieselbe ID unter
+`POST /api/banks/{id}/authorization/cancel`.
 
 **Antworten:**
 
@@ -1195,6 +1250,7 @@ Bei klassischen TAN-Verfahren (iTAN, mTAN, chipTAN) muss die TAN übermittelt we
 **Request Body:**
 ```json
 {
+  "operation_id": "<ID aus der Startantwort>",
   "tan": "123456"
 }
 ```
@@ -1203,34 +1259,34 @@ Bei klassischen TAN-Verfahren (iTAN, mTAN, chipTAN) muss die TAN übermittelt we
 
 ### TAN-Session Gültigkeit
 
-Ruft Informationen über die aktive TAN-Session einer Bank ab. Die Session-Gültigkeit basiert auf PSD2 SCA (Strong Customer Authentication), die für den Kontozugriff bis zu 90 Tage gültig ist.
+Liefert den fachlichen Freigabestatus der Bankverbindung. Ein technischer
+Session-Datensatz mit 90-Tage-Laufzeit ist ausdrücklich kein Nachweis einer
+gültigen Bankfreigabe. Zeitpunkte sind UTC; `expires_at` ist gegebenenfalls eine
+lokale Sicherheitsfrist, keine Zusage der Bank.
 
 **Endpunkt:** `GET /api/banks/{id}/tan-session`
 
-**Antwort (mit aktiver Session):**
+**Antwort (fachlicher Status):**
 ```json
 {
   "success": true,
-  "has_session": true,
-  "created_at": "15.01.2024 10:30",
-  "expires_at": "15.04.2024 10:30",
-  "remaining_days": 87,
-  "total_days": 90,
-  "progress_percent": 3,
-  "tan_mode": "pushTAN",
-  "tan_medium": "iPhone von Max",
-  "is_valid": true
+  "background_sync_available": false,
+  "authorization": {
+    "bank_id": 1,
+    "status": "unknown",
+    "reason": "not_authenticated",
+    "authenticated_at": null,
+    "required_at": null,
+    "updated_at": null,
+    "expires_at": null
+  }
 }
 ```
 
-**Antwort (ohne aktive Session):**
-```json
-{
-  "success": true,
-  "has_session": false,
-  "message": "Keine aktive TAN-Session vorhanden"
-}
-```
+Weitere Zustände sind `authorized`, `required`, `pending` und `error`.
+Ein laufender Vorgang kann für seinen Besitzer zusätzlich `operation_id`,
+`operation_expires_at` und `tan_request` enthalten. Bank-/Netzwerkfehler werden
+nicht als bestätigter TAN-Ablauf ausgegeben.
 
 ---
 

@@ -27,22 +27,22 @@
                 </div>
             </div>
             <div class="flex flex-wrap gap-2">
-                <button @click="syncAll" :disabled="syncingAll"
+                <button @click="syncAll" :disabled="busy"
                         class="inline-flex items-center rounded-md bg-gradient-to-r from-primary-600 to-green-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:from-primary-500 hover:to-green-500 disabled:opacity-50">
                     <span x-show="syncingAll" class="loading-spinner mr-2"></span>
                     <span x-text="syncingAll ? 'Synchronisiere...' : '🔄 Alles synchronisieren'"></span>
                 </button>
-                <button @click="fetchAccounts" :disabled="loading"
+                <button @click="fetchAccounts" :disabled="busy"
                         class="inline-flex items-center rounded-md bg-primary-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-primary-500 disabled:opacity-50">
                     <span x-show="loading" class="loading-spinner mr-2"></span>
-                    <span x-text="loading ? 'Lade...' : 'Konten abrufen'"></span>
+                    <span x-text="loading ? 'Lade...' : 'Gespeicherte Konten prüfen'"></span>
                 </button>
-                <button @click="syncBalances" :disabled="syncingBalances"
+                <button @click="syncBalances" :disabled="busy"
                         class="inline-flex items-center rounded-md bg-green-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-green-500 disabled:opacity-50">
                     <span x-show="syncingBalances" class="loading-spinner mr-2"></span>
                     <span x-text="syncingBalances ? 'Lade...' : 'Salden aktualisieren'"></span>
                 </button>
-                <button @click="resetSession" :disabled="resettingSession"
+                <button @click="resetSession" :disabled="busy"
                         class="inline-flex items-center rounded-md bg-yellow-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-yellow-500 disabled:opacity-50"
                         title="Löscht die gespeicherte Session und erzwingt eine neue Verbindung">
                     <span x-show="resettingSession" class="loading-spinner mr-2"></span>
@@ -50,6 +50,7 @@
                 </button>
                 <form method="POST" action="/banks/{{ bank.id }}/delete" 
                       onsubmit="return confirm('Sind Sie sicher, dass Sie diese Bankverbindung löschen möchten?');">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                     <button type="submit" class="inline-flex items-center rounded-md bg-red-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-red-500">
                         Löschen
                     </button>
@@ -117,74 +118,42 @@
         </div>
     </div>
 
-    <!-- TAN Session Validity Card -->
-    <div class="bg-white shadow rounded-lg overflow-hidden">
+    <div id="authorization" class="bg-white shadow rounded-lg overflow-hidden">
         <div class="px-4 py-4 sm:px-6 border-b border-gray-200">
             <h3 class="text-lg font-medium leading-6 text-gray-900">
-                <span class="mr-2">🔐</span> TAN-Session / Authentifizierung
+                <span class="mr-2">🔐</span> Freigabe dieser Bankverbindung
             </h3>
-            <p class="mt-1 text-sm text-gray-500">Status der starken Kundenauthentifizierung (PSD2 SCA)</p>
+            <p class="mt-1 text-sm text-gray-500">Gilt nur für diesen konfigurierten Zugang, nicht für andere Verbindungen mit gleicher BLZ.</p>
         </div>
         <div class="px-4 py-4 sm:px-6">
-            {% if tan_session %}
-            <div class="space-y-3">
-                <div class="flex items-center justify-between">
-                    <span class="text-sm text-gray-500">Status</span>
-                    {% if tan_session.is_valid %}
-                    <span class="inline-flex items-center rounded-full bg-green-100 px-3 py-1 text-sm font-medium text-green-800">✓ Aktiv</span>
-                    {% else %}
-                    <span class="inline-flex items-center rounded-full bg-red-100 px-3 py-1 text-sm font-medium text-red-800">✗ Abgelaufen</span>
-                    {% endif %}
-                </div>
-                <div class="flex items-center justify-between">
-                    <span class="text-sm text-gray-500">Letzte TAN-Bestätigung</span>
-                    <span class="text-sm text-gray-900">{{ tan_session.created_at }}</span>
-                </div>
-                <div class="flex items-center justify-between">
-                    <span class="text-sm text-gray-500">Gültig bis</span>
-                    <span class="text-sm text-gray-900">{{ tan_session.expires_at }}</span>
-                </div>
-                <div class="flex items-center justify-between">
-                    <span class="text-sm text-gray-500">Verbleibend</span>
-                    <span class="text-sm font-medium {% if tan_session.remaining_days > 14 %}text-green-600{% elseif tan_session.remaining_days > 3 %}text-yellow-600{% else %}text-red-600{% endif %}">
-                        {{ tan_session.remaining_days }} Tage
-                    </span>
-                </div>
-                {% if tan_session.tan_mode %}
-                <div class="flex items-center justify-between">
-                    <span class="text-sm text-gray-500">TAN-Verfahren</span>
-                    <span class="text-sm text-gray-900">{{ tan_session.tan_mode }}</span>
-                </div>
-                {% endif %}
-                {% if tan_session.tan_medium %}
-                <div class="flex items-center justify-between">
-                    <span class="text-sm text-gray-500">TAN-Medium</span>
-                    <span class="text-sm text-gray-900">{{ tan_session.tan_medium }}</span>
-                </div>
-                {% endif %}
-                <!-- Progress bar -->
-                <div class="mt-2">
-                    <div class="flex items-center justify-between text-xs text-gray-500 mb-1">
-                        <span>Session-Gültigkeit</span>
-                        <span>{{ tan_session.progress_percent }}% verbraucht</span>
-                    </div>
-                    <div class="w-full bg-gray-200 rounded-full h-2">
-                        <div class="h-2 rounded-full {% if tan_session.progress_percent < 70 %}bg-green-500{% elseif tan_session.progress_percent < 90 %}bg-yellow-500{% else %}bg-red-500{% endif %}"
-                             style="width: {{ tan_session.progress_percent }}%"></div>
-                    </div>
-                </div>
-                <p class="text-xs text-gray-400 mt-2">
-                    Gemäß PSD2 ist die starke Kundenauthentifizierung (SCA) für den Kontozugriff bis zu 90 Tage gültig.
-                    Nach Ablauf wird eine neue TAN-Eingabe erforderlich.
-                </p>
+            <p class="text-sm font-medium" x-text="authorizationLabel"></p>
+            <p class="text-sm text-gray-600" x-text="authorization.reason || ''"></p>
+            <p class="text-xs text-gray-500" x-show="authorization.authenticated_at">
+                Letzte bestätigte Freigabe: <span x-text="formatDate(authorization.authenticated_at)"></span>
+            </p>
+            <p class="text-xs text-gray-500" x-show="authorization.required_at">
+                Freigabe erforderlich seit: <span x-text="formatDate(authorization.required_at)"></span>
+            </p>
+            <p class="text-xs text-gray-500" x-show="authorization.expires_at">
+                Lokale Freigabefrist (keine Bankgarantie): <span x-text="formatDate(authorization.expires_at)"></span>
+            </p>
+            <p class="text-xs text-gray-500" x-show="operationExpiresAt">
+                Aktuelle TAN-Anfrage läuft ab: <span x-text="formatDate(operationExpiresAt)"></span>
+            </p>
+            <p class="mt-2 text-sm text-gray-500">Normale Abrufe und Hintergrund-Synchronisierung fordern niemals automatisch eine TAN an. Die lokale Freigabefrist ist eine Sicherheitsrichtlinie dieser Anwendung, keine von der Bank garantierte Gültigkeit. Auch eine gespeicherte technische Session belegt keine Freigabe. Gespeicherte Salden können veraltet sein.</p>
+            <div x-show="authorizationContext" x-cloak class="mt-3 rounded-md bg-blue-50 p-3 text-sm">
+                <p>Ausgewähltes Konto: <strong x-text="authorizationAccountName"></strong></p>
+                <p>Transaktionszeitraum: <span x-text="authorizationContext?.from"></span> bis <span x-text="authorizationContext?.to"></span></p>
+                <p>Der folgende Freigabe-Klick fordert diesen Zeitraum ausdrücklich an. Die Bank kann den verfügbaren Zeitraum begrenzen.</p>
             </div>
-            {% else %}
-            <div class="text-center py-4">
-                <span class="text-3xl">🔓</span>
-                <p class="mt-2 text-sm text-gray-500">Keine aktive TAN-Session vorhanden</p>
-                <p class="text-xs text-gray-400 mt-1">Eine Session wird bei der nächsten Synchronisierung mit TAN-Bestätigung erstellt.</p>
-            </div>
-            {% endif %}
+            <p x-show="contextError" x-cloak role="alert" class="mt-3 text-sm text-red-700" x-text="contextError"></p>
+            <a x-show="authorizationContext || contextError" href="/banks/{{ bank.id }}#authorization" class="mt-2 block text-sm text-primary-600">Auswahl entfernen – gesamten Bankzugang freigeben</a>
+            <button @click="authorize" :disabled="busy || !!contextError" class="mt-3 rounded-md bg-primary-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">
+                Bankzugang freigeben
+            </button>
+            <button x-show="authorization.status === 'pending'" @click="resumeAuthorization" :disabled="requestBusy" class="mt-3 rounded-md border px-4 py-2 text-sm">Freigabe fortsetzen</button>
+            <button x-show="authorization.status === 'pending'" @click="closeModal" :disabled="requestBusy" class="mt-3 rounded-md border px-4 py-2 text-sm">Freigabe abbrechen</button>
+            <p class="mt-1 text-xs text-gray-500">Nur „Bankzugang freigeben“ startet einen manuellen Abruf einschließlich Kontenerkennung mit erlaubter TAN-/App-Bestätigung.</p>
         </div>
     </div>
 
@@ -204,6 +173,7 @@
                         <h3 class="text-lg leading-6 font-medium text-gray-900" id="modal-title" x-text="isDecoupled ? 'App-Bestätigung erforderlich' : 'TAN-Eingabe erforderlich'"></h3>
                         <div class="mt-2">
                             <p class="text-sm text-gray-500" x-text="tanRequest?.challenge || (isDecoupled ? 'Bitte bestätigen Sie in Ihrer Banking-App' : 'Bitte geben Sie Ihre TAN ein')"></p>
+                            <p x-show="message?.type === 'error'" class="mt-2 text-sm text-red-700" role="alert" x-text="message?.text"></p>
                             <p x-show="tanRequest?.tan_medium" class="text-sm text-gray-500 mt-1">
                                 Medium: <span x-text="tanRequest?.tan_medium"></span>
                             </p>
@@ -215,6 +185,10 @@
                                 <div class="loading-spinner" style="width: 40px; height: 40px; border-width: 4px;"></div>
                             </div>
                             <p class="mt-4 text-sm text-gray-600" x-text="pollingStatus"></p>
+                            <button x-show="tanRequest?.automated_polling_allowed !== true" @click="checkDecoupledStatus(true)" :disabled="requestBusy"
+                                    class="mt-3 rounded-md border px-3 py-2 text-sm">
+                                Bestätigung jetzt prüfen
+                            </button>
                             <p class="mt-2 text-xs text-gray-400">Die Seite aktualisiert sich automatisch nach der Bestätigung</p>
                         </div>
                         
@@ -228,13 +202,13 @@
                 </div>
                 <div class="mt-5 sm:mt-6" :class="isDecoupled ? '' : 'sm:grid sm:grid-cols-2 sm:gap-3 sm:grid-flow-row-dense'">
                     <!-- Regular TAN: Confirm button -->
-                    <button x-show="!isDecoupled" type="button" @click="submitTan" :disabled="submittingTan"
+                    <button x-show="!isDecoupled" type="button" @click="submitTan" :disabled="requestBusy"
                             class="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-primary-600 text-base font-medium text-white hover:bg-primary-700 focus:outline-none sm:col-start-2 sm:text-sm disabled:opacity-50">
                         <span x-show="submittingTan" class="loading-spinner mr-2"></span>
                         Bestätigen
                     </button>
                     <!-- Cancel button -->
-                    <button type="button" @click="closeModal"
+                    <button type="button" @click="closeModal" :disabled="requestBusy"
                             class="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none sm:mt-0 sm:text-sm"
                             :class="isDecoupled ? '' : 'sm:col-start-1'">
                         Abbrechen
@@ -419,7 +393,7 @@
             <h3 class="text-lg font-medium leading-6 text-gray-900">Konten</h3>
             <div class="flex items-center gap-3">
                 <span class="text-xs text-gray-400" title="Saldo vom Gesamtsaldo auf dem Dashboard ausschließen">💰 Saldo</span>
-                <span class="text-xs text-gray-400" title="Manuelle TAN-Freigabe: Bei abgelaufener TAN wird kein automatischer TAN-Abruf durchgeführt – TAN muss manuell über die UI bestätigt werden. Das Konto wird weiterhin synchronisiert.">🔐 TAN</span>
+                <span class="text-xs text-gray-400" title="Konto unabhängig von TAN-Freigabe in die Hintergrund-Synchronisierung einbeziehen">🔄 Hintergrund</span>
                 <span class="text-xs text-gray-400" title="MQTT aktivieren um Kontodaten an Home Assistant zu senden">📡 MQTT</span>
             </div>
         </div>
@@ -489,13 +463,12 @@
                                       :class="excluded ? 'translate-x-5' : 'translate-x-0'"></span>
                             </button>
                         </div>
-                        <!-- TAN Manual Approval Toggle -->
-                        <div x-data="tanApprovalToggle({{ account.id }}, {{ account.tan_manual_approval ?? 0 }})" class="mr-2" @click.stop>
-                            <button @click="toggle" type="button" 
+                        <div x-data="backgroundSyncToggle({{ account.id }}, {{ account.background_sync_enabled ?? 1 }})" class="mr-2" @click.stop>
+                            <button @click="toggle" type="button" :disabled="saving" role="switch" :aria-checked="enabled"
                                     class="relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-yellow-500 focus:ring-offset-2"
                                     :class="enabled ? 'bg-yellow-500' : 'bg-gray-200'"
-                                    :title="enabled ? 'Manuelle TAN-Freigabe aktiv (kein automatischer TAN-Abruf bei abgelaufener TAN)' : 'Automatischer TAN-Abruf erlaubt'">
-                                <span class="sr-only">TAN Manuelle Freigabe</span>
+                                    :title="enabled ? 'Hintergrund-Synchronisierung aktiv (ohne automatische TAN)' : 'Von Hintergrund-Synchronisierung ausgeschlossen'">
+                                <span class="sr-only">Hintergrund-Synchronisierung</span>
                                 <span class="pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out"
                                       :class="enabled ? 'translate-x-5' : 'translate-x-0'"></span>
                             </button>
@@ -525,7 +498,7 @@
         <div class="px-4 py-12 text-center">
             <span class="text-4xl">💳</span>
             <p class="mt-2 text-sm text-gray-500">Keine Konten vorhanden</p>
-            <p class="text-sm text-gray-400">Klicken Sie auf "Konten abrufen" um die Konten von der Bank zu laden</p>
+            <p class="text-sm text-gray-400">Wählen Sie „Bankzugang freigeben“, um den Zugang einzurichten und Konten zu erkennen. Eine TAN wird nur bei dieser ausdrücklichen Freigabe angefordert.</p>
         </div>
         {% endif %}
     </div>
@@ -540,7 +513,7 @@
             </h3>
             <div class="flex items-center gap-3">
                 <span class="text-xs text-gray-400" title="Saldo vom Gesamtsaldo auf dem Dashboard ausschließen">💰 Saldo</span>
-                <span class="text-xs text-gray-400" title="Manuelle TAN-Freigabe: Bei abgelaufener TAN wird kein automatischer TAN-Abruf durchgeführt – TAN muss manuell über die UI bestätigt werden. Das Depot wird weiterhin synchronisiert.">🔐 TAN</span>
+                <span class="text-xs text-gray-400" title="Depot unabhängig von TAN-Freigabe in die Hintergrund-Synchronisierung einbeziehen">🔄 Hintergrund</span>
                 <span class="text-xs text-gray-400" title="MQTT aktivieren um Depotdaten an Home Assistant zu senden">📡 MQTT</span>
             </div>
         </div>
@@ -594,13 +567,12 @@
                                       :class="excluded ? 'translate-x-5' : 'translate-x-0'"></span>
                             </button>
                         </div>
-                        <!-- TAN Manual Approval Toggle -->
-                        <div x-data="tanApprovalToggle({{ depot.id }}, {{ depot.tan_manual_approval ?? 0 }})" class="mr-2" @click.stop>
-                            <button @click="toggle" type="button" 
+                        <div x-data="backgroundSyncToggle({{ depot.id }}, {{ depot.background_sync_enabled ?? 1 }})" class="mr-2" @click.stop>
+                            <button @click="toggle" type="button" :disabled="saving" role="switch" :aria-checked="enabled"
                                     class="relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-yellow-500 focus:ring-offset-2"
                                     :class="enabled ? 'bg-yellow-500' : 'bg-gray-200'"
-                                    :title="enabled ? 'Manuelle TAN-Freigabe aktiv (kein automatischer TAN-Abruf bei abgelaufener TAN)' : 'Automatischer TAN-Abruf erlaubt'">
-                                <span class="sr-only">TAN Manuelle Freigabe</span>
+                                    :title="enabled ? 'Hintergrund-Synchronisierung aktiv (ohne automatische TAN)' : 'Von Hintergrund-Synchronisierung ausgeschlossen'">
+                                <span class="sr-only">Hintergrund-Synchronisierung</span>
                                 <span class="pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out"
                                       :class="enabled ? 'translate-x-5' : 'translate-x-0'"></span>
                             </button>
@@ -901,16 +873,19 @@ function mqttToggle(accountId, initialValue) {
     };
 }
 
-function tanApprovalToggle(accountId, initialValue) {
+function backgroundSyncToggle(accountId, initialValue) {
     return {
         accountId: accountId,
         enabled: initialValue == 1,
+        saving: false,
         
         async toggle() {
+            if (this.saving) return;
+            this.saving = true;
             const newValue = !this.enabled;
             
             try {
-                const response = await fetch(`/api/accounts/${this.accountId}/tan-manual-approval`, {
+                const response = await fetch(`/api/accounts/${this.accountId}/background-sync`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ enabled: newValue })
@@ -924,6 +899,8 @@ function tanApprovalToggle(accountId, initialValue) {
                 }
             } catch (error) {
                 alert('Netzwerkfehler: ' + error.message);
+            } finally {
+                this.saving = false;
             }
         }
     };
@@ -1043,7 +1020,8 @@ function activityLog(bankId) {
         
         formatDate(dateStr) {
             if (!dateStr) return '-';
-            const date = new Date(dateStr);
+            const date = utcDate(dateStr);
+            if (!date) return '-';
             return date.toLocaleString('de-DE', {
                 day: '2-digit',
                 month: '2-digit',
@@ -1104,9 +1082,133 @@ function bankDetails(bankId) {
         isDecoupled: false,
         pollingInterval: null,
         pollingStatus: '',
+        authorization: {{ bank.authorization|json_encode(15)|raw }},
+        manualAuthorization: false,
+        requestBusy: false,
+        pollAttempts: 0,
+        operationId: null,
+        operationExpiresAt: null,
+        authorizationRequestId: null,
+        nextPollAt: 0,
+        authorizationContext: null,
+        authorizationAccountName: '',
+        contextError: null,
+        authorizationAccounts: [{% for account in accounts %}{id: {{ account.id }}, name: '{{ (account.custom_name ?? account.account_name ?? account.iban ?? 'Konto')|e('js') }}'}{{ not loop.last ? ',' : '' }}{% endfor %}],
+
+        init() {
+            const params = new URLSearchParams(location.search);
+            if (!['account_id', 'from', 'to'].some(key => params.has(key))) return;
+            const accountId = params.get('account_id') || '';
+            const from = params.get('from') || '';
+            const to = params.get('to') || '';
+            const account = this.authorizationAccounts.find(item => String(item.id) === accountId);
+            const validDate = value => {
+                if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+                const date = new Date(value + 'T00:00:00Z');
+                return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
+            };
+            if (!account || !validDate(from) || !validDate(to) || from > to) {
+                this.contextError = 'Ungültige Konto-/Zeitraumauswahl. Bitte Auswahl entfernen oder erneut auf der Kontoseite wählen.';
+                return;
+            }
+            this.authorizationContext = { account_id: Number(accountId), from, to };
+            this.authorizationAccountName = account.name;
+        },
+
+        get busy() {
+            return this.loading || this.syncingBalances || this.syncingAll || this.resettingSession || this.requestBusy || this.manualAuthorization || this.authorization.status === 'pending';
+        },
+
+        get authorizationLabel() {
+            return { unknown: 'Freigabestatus unbekannt', authorized: 'Bankzugang freigegeben', required: 'Bankfreigabe erforderlich', pending: 'Bankfreigabe ausstehend', error: 'Fehler beim Bankzugang' }[this.authorization.status] || 'Freigabestatus unbekannt';
+        },
+
+        formatDate(value) {
+            return utcDate(value)?.toLocaleString('de-DE') || 'Unbekannt';
+        },
+
+        async refreshAuthorization() {
+            const response = await fetch(`/api/banks/${this.bankId}/tan-session`);
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.message || 'Status konnte nicht geladen werden');
+            this.authorization = data.authorization || data.authorization_state || this.authorization;
+            this.operationId = data.operation_id || null;
+            this.operationExpiresAt = data.operation_expires_at || null;
+            return data;
+        },
+
+        async authorize() {
+            if (this.busy || this.contextError) return;
+            this.manualAuthorization = true;
+            this.pollAttempts = 0;
+            this.requestBusy = true;
+            this.message = null;
+            try {
+                this.authorizationRequestId ??= Array.from(crypto.getRandomValues(new Uint8Array(24)), byte => byte.toString(16).padStart(2, '0')).join('');
+                const response = await fetch(`/api/banks/${this.bankId}/authorize`, {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ request_id: this.authorizationRequestId, ...(this.authorizationContext || {}) })
+                });
+                const data = await response.json();
+                this.handleAuthorizationResponse(data);
+            } catch (error) {
+                this.manualAuthorization = false;
+                this.message = { type: 'error', text: 'Freigabestatus unklar: ' + error.message + '. Bitte Status auf der Bankseite prüfen, nicht erneut anfordern.' };
+            } finally {
+                this.requestBusy = false;
+                await this.refreshAuthorization().catch(() => {});
+            }
+        },
+
+        async resumeAuthorization() {
+            if (this.requestBusy) return;
+            this.requestBusy = true;
+            try {
+                const data = await this.refreshAuthorization();
+                if (data.tan_request) {
+                    this.manualAuthorization = true;
+                    this.pollAttempts = 0;
+                    this.handleAuthorizationResponse({ ...data, needs_tan: true });
+                } else {
+                    this.message = { type: 'error', text: 'Keine fortsetzbare TAN-Anfrage vorhanden. Freigabe gegebenenfalls abbrechen und neu starten.' };
+                }
+            } catch (error) {
+                this.message = { type: 'error', text: error.message };
+            } finally {
+                this.requestBusy = false;
+            }
+        },
+
+        handleAuthorizationResponse(data) {
+            if (data.authorization) this.authorization = data.authorization;
+            if (data.operation_id) {
+                if (this.operationId !== data.operation_id) this.pollAttempts = 0;
+                this.operationId = data.operation_id;
+            }
+            if (data.operation_expires_at) this.operationExpiresAt = data.operation_expires_at;
+            if (data.needs_tan && this.manualAuthorization) {
+                this.tanRequest = data.tan_request;
+                this.isDecoupled = !!data.tan_request?.is_decoupled;
+                this.showTanModal = true;
+                this.authorization.status = 'pending';
+                this.tanInput = '';
+                this.stopDecoupledPolling();
+                this.nextPollAt = Date.now() + Math.max(3, Number(this.tanRequest?.poll_interval) || 3) * 1000;
+                if (this.isDecoupled) this.startDecoupledPolling();
+            } else {
+                this.stopDecoupledPolling();
+                this.showTanModal = false;
+                this.manualAuthorization = false;
+                this.authorizationRequestId = null;
+                const warning = safeSyncWarning(data);
+                this.message = { type: data.success && !warning ? 'success' : 'error', text: warning || data.message || (data.success ? 'Freigabe und Kontenabruf abgeschlossen.' : 'Freigabe fehlgeschlagen.') };
+                if (data.success && !warning) setTimeout(() => location.reload(), 1500);
+            }
+        },
 
         async resetSession() {
-            if (!confirm('Session wirklich zurücksetzen? Dies löscht die gespeicherte Verbindung und erfordert beim nächsten Abruf möglicherweise eine neue TAN-Bestätigung.')) {
+            if (this.busy) return;
+            if (!confirm('Technische Session zurücksetzen? Eine notwendige Bankfreigabe muss anschließend ausdrücklich über „Bankzugang freigeben“ gestartet werden.')) {
                 return;
             }
             
@@ -1130,9 +1232,11 @@ function bankDetails(bankId) {
             }
             
             this.resettingSession = false;
+            await this.refreshAuthorization().catch(() => {});
         },
 
         async syncAll() {
+            if (this.busy) return;
             this.syncingAll = true;
             this.message = null;
 
@@ -1143,17 +1247,11 @@ function bankDetails(bankId) {
                 });
                 const data = await response.json();
 
-                if (data.needs_tan) {
-                    this.tanRequest = data.tan_request;
-                    this.isDecoupled = data.tan_request?.is_decoupled || false;
-                    this.showTanModal = true;
-                    
-                    if (this.isDecoupled) {
-                        this.pollingStatus = 'Bitte bestätigen Sie die Anfrage in Ihrer Banking-App...';
-                        this.startDecoupledPolling();
-                    }
+                const warning = safeSyncWarning(data);
+                if (warning) {
+                    this.message = { type: 'error', text: warning };
                 } else if (data.success) {
-                    const stats = data.stats;
+                    const stats = data.stats || {};
                     let msg = '✓ Synchronisierung abgeschlossen: ';
                     const parts = [];
                     if (stats.balances_updated > 0) parts.push(`${stats.balances_updated} Salden`);
@@ -1176,9 +1274,11 @@ function bankDetails(bankId) {
             }
 
             this.syncingAll = false;
+            await this.refreshAuthorization().catch(() => {});
         },
 
         async fetchAccounts() {
+            if (this.busy) return;
             this.loading = true;
             this.message = null;
 
@@ -1186,16 +1286,9 @@ function bankDetails(bankId) {
                 const response = await fetch(`/api/banks/${this.bankId}/accounts`);
                 const data = await response.json();
 
-                if (data.needs_tan) {
-                    this.tanRequest = data.tan_request;
-                    this.isDecoupled = data.tan_request?.is_decoupled || false;
-                    this.showTanModal = true;
-                    
-                    // Start polling for decoupled TAN
-                    if (this.isDecoupled) {
-                        this.pollingStatus = 'Bitte bestätigen Sie die Anfrage in Ihrer Banking-App...';
-                        this.startDecoupledPolling();
-                    }
+                const warning = safeSyncWarning(data);
+                if (warning) {
+                    this.message = { type: 'error', text: warning };
                 } else if (data.success) {
                     this.message = { type: 'success', text: 'Konten erfolgreich abgerufen!' };
                     setTimeout(() => location.reload(), 1000);
@@ -1207,9 +1300,11 @@ function bankDetails(bankId) {
             }
 
             this.loading = false;
+            await this.refreshAuthorization().catch(() => {});
         },
         
         async syncBalances() {
+            if (this.busy) return;
             this.syncingBalances = true;
             this.message = null;
 
@@ -1220,15 +1315,9 @@ function bankDetails(bankId) {
                 });
                 const data = await response.json();
 
-                if (data.needs_tan) {
-                    this.tanRequest = data.tan_request;
-                    this.isDecoupled = data.tan_request?.is_decoupled || false;
-                    this.showTanModal = true;
-                    
-                    if (this.isDecoupled) {
-                        this.pollingStatus = 'Bitte bestätigen Sie die Anfrage in Ihrer Banking-App...';
-                        this.startDecoupledPolling();
-                    }
+                const warning = safeSyncWarning(data);
+                if (warning) {
+                    this.message = { type: 'error', text: warning };
                 } else if (data.success) {
                     this.message = { type: 'success', text: `${data.updated_count} Kontosalden aktualisiert!` };
                     setTimeout(() => location.reload(), 1500);
@@ -1240,11 +1329,19 @@ function bankDetails(bankId) {
             }
 
             this.syncingBalances = false;
+            await this.refreshAuthorization().catch(() => {});
         },
 
         startDecoupledPolling() {
-            // Poll every 3 seconds
-            this.pollingInterval = setInterval(() => this.checkDecoupledStatus(), 3000);
+            if (!this.manualAuthorization) return;
+            this.stopDecoupledPolling();
+            if (this.tanRequest?.automated_polling_allowed !== true) {
+                this.pollingStatus = 'Automatische Prüfung ist für dieses Verfahren nicht erlaubt. Nach Bestätigung in der App bitte „Bestätigung jetzt prüfen“ wählen.';
+                return;
+            }
+            this.pollingStatus = 'Warte auf Bestätigung in der Banking-App...';
+            const delay = Math.max(3, Number(this.tanRequest?.poll_interval) || 3) * 1000;
+            this.pollingInterval = setInterval(() => this.checkDecoupledStatus(), delay);
         },
 
         stopDecoupledPolling() {
@@ -1254,72 +1351,53 @@ function bankDetails(bankId) {
             }
         },
 
-        async checkDecoupledStatus() {
+        async checkDecoupledStatus(manual = false) {
+            if (!this.manualAuthorization || this.requestBusy) return;
+            if (!manual && this.tanRequest?.automated_polling_allowed !== true) return;
+            const expires = utcDate(this.operationExpiresAt);
+            if (expires && expires.getTime() <= Date.now()) {
+                this.stopDecoupledPolling();
+                this.pollingStatus = 'Freigabe abgelaufen. Bitte abbrechen und bei Bedarf ausdrücklich neu starten.';
+                return;
+            }
+            if (Date.now() < this.nextPollAt) {
+                this.pollingStatus = 'Bitte die von der Bank vorgegebene Wartezeit abwarten und anschließend erneut prüfen.';
+                return;
+            }
+            const bankLimit = Number(this.tanRequest?.max_polls) || 100;
+            if (++this.pollAttempts > Math.min(100, bankLimit)) {
+                this.stopDecoupledPolling();
+                this.pollingStatus = 'Zeitlimit erreicht. Bitte Freigabe abbrechen oder auf der Bankseite fortsetzen.';
+                return;
+            }
+            this.requestBusy = true;
             try {
                 const response = await fetch(`/api/banks/${this.bankId}/decoupled`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
-                    }
+                    },
+                    body: JSON.stringify({ operation_id: this.operationId })
                 });
                 const data = await response.json();
 
-                if (data.status === 'pending') {
-                    // Still waiting, continue polling
-                    this.pollingStatus = 'Warte auf Bestätigung in der Banking-App...';
-                } else if (data.needs_tan) {
-                    // Another TAN needed (might be different type)
-                    this.stopDecoupledPolling();
-                    this.tanRequest = data.tan_request;
-                    this.isDecoupled = data.tan_request?.is_decoupled || false;
-                    if (this.isDecoupled) {
-                        this.startDecoupledPolling();
-                    }
-                } else if (data.success) {
-                    this.stopDecoupledPolling();
-                    this.showTanModal = false;
-                    this.syncingAll = false;
-                    this.loading = false;
-                    this.syncingBalances = false;
-                    
-                    // Check if this is a syncAll result (has stats)
-                    if (data.stats) {
-                        const stats = data.stats;
-                        let msg = '✓ Synchronisierung abgeschlossen: ';
-                        const parts = [];
-                        if (stats.balances_updated > 0) parts.push(`${stats.balances_updated} Salden`);
-                        if (stats.transactions_new > 0) parts.push(`${stats.transactions_new} neue Transaktionen`);
-                        if (stats.transactions_updated > 0) parts.push(`${stats.transactions_updated} aktualisierte Transaktionen`);
-                        if (stats.holdings_updated > 0) parts.push(`${stats.holdings_updated} Wertpapiere`);
-                        msg += parts.length > 0 ? parts.join(', ') : 'Alles aktuell';
-                        
-                        if (stats.errors && stats.errors.length > 0) {
-                            msg += ` (${stats.errors.length} Fehler)`;
-                        }
-                        
-                        this.message = { type: 'success', text: msg };
-                    } else {
-                        // Regular account fetch success
-                        this.message = { type: 'success', text: data.message || 'Konten erfolgreich abgerufen!' };
-                    }
-                    setTimeout(() => location.reload(), 2000);
-                } else {
-                    this.stopDecoupledPolling();
-                    this.showTanModal = false;
-                    this.syncingAll = false;
-                    this.loading = false;
-                    this.syncingBalances = false;
-                    this.message = { type: 'error', text: data.message || 'Fehler bei der Bestätigung' };
-                }
+                this.handleAuthorizationResponse(data);
             } catch (error) {
-                // Don't stop polling on network errors, just log
-                console.error('Polling error:', error);
+                this.stopDecoupledPolling();
+                this.pollingStatus = 'Netzwerkfehler. Bitte Freigabe abbrechen oder auf der Bankseite fortsetzen.';
+            } finally {
+                this.requestBusy = false;
+                if (!this.showTanModal) {
+                    this.manualAuthorization = false;
+                    await this.refreshAuthorization().catch(() => {});
+                }
             }
         },
 
         async submitTan() {
-            if (!this.tanInput.trim()) return;
+            if (!this.manualAuthorization || this.requestBusy || !this.tanInput.trim()) return;
             
+            this.requestBusy = true;
             this.submittingTan = true;
 
             try {
@@ -1328,55 +1406,55 @@ function bankDetails(bankId) {
                     headers: {
                         'Content-Type': 'application/json',
                     },
-                    body: JSON.stringify({ tan: this.tanInput })
+                    body: JSON.stringify({ tan: this.tanInput, operation_id: this.operationId })
                 });
                 const data = await response.json();
 
-                if (data.needs_tan) {
-                    this.tanRequest = data.tan_request;
-                    this.isDecoupled = data.tan_request?.is_decoupled || false;
-                    this.tanInput = '';
-                    if (this.isDecoupled) {
-                        this.startDecoupledPolling();
-                    }
-                } else if (data.success) {
-                    this.showTanModal = false;
-                    if (data.stats) {
-                        const stats = data.stats;
-                        let msg = '✓ Synchronisierung abgeschlossen: ';
-                        const parts = [];
-                        if (stats.balances_updated > 0) parts.push(`${stats.balances_updated} Salden`);
-                        if (stats.transactions_new > 0) parts.push(`${stats.transactions_new} neue Transaktionen`);
-                        if (stats.transactions_updated > 0) parts.push(`${stats.transactions_updated} aktualisiert`);
-                        msg += parts.length > 0 ? parts.join(', ') : 'Keine Änderungen';
-                        this.message = { type: 'success', text: msg };
-                    } else if (data.new_count !== undefined) {
-                        const msg = data.new_count > 0 
-                            ? `${data.new_count} neue Transaktionen, ${data.updated_count || 0} aktualisiert`
-                            : `${data.count || 0} Transaktionen geprüft (keine neuen)`;
-                        this.message = { type: 'success', text: msg };
-                    } else {
-                        this.message = { type: 'success', text: data.message || 'TAN akzeptiert' };
-                    }
-                    setTimeout(() => location.reload(), 1500);
-                } else {
-                    this.message = { type: 'error', text: data.message || 'TAN-Fehler' };
-                    this.showTanModal = false;
-                }
+                this.handleAuthorizationResponse(data);
             } catch (error) {
                 this.message = { type: 'error', text: 'Netzwerkfehler: ' + error.message };
                 this.showTanModal = false;
             }
 
             this.submittingTan = false;
+            this.requestBusy = false;
             this.tanInput = '';
+            if (!this.showTanModal) {
+                this.manualAuthorization = false;
+                await this.refreshAuthorization().catch(() => {});
+            }
         },
 
-        closeModal() {
+        async closeModal() {
+            if (this.requestBusy) return;
             this.stopDecoupledPolling();
-            this.showTanModal = false;
             this.tanInput = '';
-            this.isDecoupled = false;
+            this.requestBusy = true;
+            try {
+                if (!this.operationId) await this.refreshAuthorization();
+                if (!this.operationId) throw new Error('Diese Freigabe kann nur im Browser fortgesetzt oder abgebrochen werden, der sie gestartet hat.');
+                const response = await fetch(`/api/banks/${this.bankId}/authorization/cancel`, {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ operation_id: this.operationId })
+                });
+                const data = await response.json();
+                if (!response.ok || !data.success) throw new Error(data.message || 'Abbruch fehlgeschlagen');
+                this.showTanModal = false;
+                this.manualAuthorization = false;
+                this.isDecoupled = false;
+                this.authorizationRequestId = null;
+                this.message = { type: 'success', text: 'Freigabe abgebrochen. Gespeicherte Kontodaten bleiben erhalten.' };
+                await this.refreshAuthorization();
+            } catch (error) {
+                this.message = { type: 'error', text: error.message };
+                this.pollingStatus = 'Abbruch nicht bestätigt. Bitte erneut abbrechen oder den Status prüfen.';
+            } finally {
+                this.requestBusy = false;
+            }
+        },
+
+        destroy() {
+            this.stopDecoupledPolling();
         }
     }
 }

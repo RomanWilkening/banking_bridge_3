@@ -12,14 +12,16 @@ use Monolog\Handler\StreamHandler;
 
 return [
     'settings' => [
-        'displayErrorDetails' => true,
+        'displayErrorDetails' => filter_var(getenv('APP_DEBUG') ?: 'false', FILTER_VALIDATE_BOOLEAN),
         'database' => [
-            'path' => '/data/banking.db'
+            'path' => (getenv('DATA_PATH') ?: '/data') . '/banking.db'
         ],
     ],
 
     'view' => function (ContainerInterface $container) {
-        return Twig::create(__DIR__ . '/../templates', ['cache' => false]);
+        $view = Twig::create(__DIR__ . '/../templates', ['cache' => false]);
+        $view->getEnvironment()->addGlobal('csrf_token', $_SESSION['csrf_token'] ?? '');
+        return $view;
     },
 
     Twig::class => function (ContainerInterface $container) {
@@ -28,10 +30,11 @@ return [
 
     Logger::class => function (ContainerInterface $container) {
         $logger = new Logger('app');
+        $level = $container->get('settings')['displayErrorDetails'] ? Logger::DEBUG : Logger::WARNING;
         // Log to file
-        $logger->pushHandler(new StreamHandler('/data/app.log', Logger::DEBUG));
+        $logger->pushHandler(new StreamHandler((getenv('DATA_PATH') ?: '/data') . '/app.log', $level));
         // Also log to stdout (for docker-compose logs)
-        $logger->pushHandler(new StreamHandler('php://stdout', Logger::DEBUG));
+        $logger->pushHandler(new StreamHandler('php://stdout', $level));
         return $logger;
     },
 

@@ -19,6 +19,18 @@
         }
     },
     "scripts": {
-        "start": "php -S 0.0.0.0:8080 -t public"
+        "start": "php -S 0.0.0.0:8080 -t public",
+        "test": [
+            "@php tests/config-security.php",
+            "@php tests/database_authorization.php",
+            "@php tests/database_integrity.php",
+            "@php tests/paypal_integrity.php",
+            "@php tests/fints-authorization.php",
+            "@php tests/auto-sync-safe.php",
+            "@php tests/mqtt-reasons.php",
+            "@php tests/mqtt-authorization.php",
+            "@php tests/ui-authorization.php"
+        ],
+        "test:ui": "node tests/ui-authorization.js"
     }
 }

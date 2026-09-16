@@ -145,6 +145,7 @@
     </div>
 
     <form method="POST" action="/settings">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <!-- FinTS Settings -->
         <div class="bg-white shadow rounded-lg mb-6">
             <div class="px-4 py-5 sm:px-6 border-b border-gray-200">
@@ -215,9 +216,10 @@
 
                 <div class="bg-yellow-50 p-3 rounded-md">
                     <p class="text-sm text-yellow-800">
-                        <strong>⚠️ Hinweis:</strong> Die automatische Synchronisierung funktioniert nur für Banken, 
-                        die nach der ersten manuellen Authentifizierung keine weitere TAN benötigen. 
-                        Banken die eine TAN verlangen werden übersprungen und im Aktivitätsprotokoll vermerkt.
+                        <strong>⚠️ Hinweis:</strong> Hintergrund-Abrufe lösen niemals eine TAN-/App-Anfrage aus.
+                        Ist ein TAN-freier Abruf technisch nicht gewährleistet, wird er ohne Bankdialog übersprungen.
+                        Die manuelle Freigabe starten Sie ausschließlich mit „Bankzugang freigeben“ auf der Bankseite.
+                        Konten lassen sich dort unabhängig davon von der Hintergrund-Synchronisierung ausschließen.
                     </p>
                 </div>
 
@@ -281,10 +283,14 @@
                     </div>
                     <div>
                         <label for="mqtt_password" class="block text-sm font-medium text-gray-700">MQTT Passwort</label>
-                        <input type="password" name="mqtt_password" id="mqtt_password"
+                        <input type="password" name="mqtt_password" id="mqtt_password" autocomplete="new-password"
                                class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm border px-3 py-2"
-                               placeholder="••••••••"
-                               value="{{ settings.mqtt_password }}">
+                               placeholder="Leer lassen, um das Passwort beizubehalten">
+                        <p class="mt-1 text-sm text-gray-500">Das gespeicherte Passwort wird nicht angezeigt. Nur zum Ändern ein neues Passwort eingeben.</p>
+                        <label class="mt-2 flex items-center gap-2 text-sm text-gray-700">
+                            <input type="checkbox" name="mqtt_password_clear" value="1" class="rounded border-gray-300">
+                            Gespeichertes MQTT-Passwort ausdrücklich löschen (auch bei neuer Eingabe)
+                        </label>
                     </div>
                 </div>
                 <div>
