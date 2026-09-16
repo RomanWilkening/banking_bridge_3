@@ -46,7 +46,7 @@ final class OfflineChallenge implements TanRequest
 final class OfflineSaldo
 {
     public function getAmount(): float { return 123.45; }
-    public function getCurrency(): string { return 'EUR'; }
+    public function getCurrency(): string { return 'SEK'; }
     public function getTimestamp(): ?DateTime { return null; }
 }
 
@@ -146,6 +146,18 @@ final class OfflineService extends FinTSService
     }
 }
 
+final class OfflineFailingMqtt extends \App\Services\MqttService
+{
+    public int $attempts = 0;
+    public function __construct() {}
+    public function isEnabled(): bool { return true; }
+    public function publishAuthorizationStates(): array
+    {
+        $this->attempts++;
+        throw new RuntimeException('Offline MQTT failure');
+    }
+}
+
 $directory = __DIR__ . '/.fints-authorization-' . getmypid();
 mkdir($directory, 0700);
 try {
@@ -153,7 +165,7 @@ try {
     $bank = $db->createBank(['name' => 'Offline', 'bank_code' => '00000000', 'fints_url' => 'https://invalid.invalid',
         'username' => 'fixture', 'password' => 'fixture']);
     $checking = $db->upsertAccount($bank, ['account_number' => '1234', 'iban' => 'DE00000000000000000000',
-        'account_name' => 'Personal name', 'account_type' => 'checking']);
+        'account_name' => 'Personal name', 'account_type' => 'checking', 'currency' => 'GBP']);
     $depot = $db->upsertAccount($bank, ['account_number' => '5678', 'account_name' => 'ZZ Depot', 'account_type' => 'depot']);
     $db->setAccountBackgroundSync($checking, false);
     $db->setAccountTanManualApproval($checking, true);
@@ -217,12 +229,16 @@ try {
         $result = $auth->resume($bank, 'browser-a', $previous, '123456', false);
         verify(!empty($result['needs_tan']), 'Expected next TAN for ' . $type . ': ' . json_encode($result));
         verify(end(OfflineFinTs::$events) === $type, 'Continued after TAN for ' . $type);
+        if ($type === 'GetBalance') {
+            verify($db->getAccountById($checking)['currency'] === 'GBP', 'Metadata-only account discovery overwrote known currency');
+        }
         verify($result['operation_id'] !== $previous, 'New challenge reused old operation token');
         $before = OfflineFinTs::$events;
         verify($auth->resume($bank, 'browser-a', $previous, '123456', false)['reason'] === 'authorization_operation_mismatch', 'Duplicate TAN replayed into next action');
         verify(OfflineFinTs::$events === $before, 'Mismatched TAN performed traffic');
     }
     verify($db->getAccountById($checking)['balance'] === 123.45, 'Partial balance not saved before later TAN');
+    verify($db->getAccountById($checking)['currency'] === 'SEK', 'Actual balance currency was not persisted');
     $result = $auth->resume($bank, 'browser-a', $result['operation_id'], '123456', false);
     verify($result['success'] === true, 'Full manual sync failed: ' . json_encode($result));
     verify($result['stats']['balances_updated'] === 1, 'Partial balance counted twice');
@@ -347,6 +363,12 @@ try {
     $db->deleteBank($secondBank);
     verify((int) $db->getPdo()->query('SELECT COUNT(*) FROM fints_authorization_operations')->fetchColumn() === 1,
         'Deleting a connection retained its pending dialog or deleted another connection operation');
+    $_SESSION['fints_authorization_owner'] = 'browser-a';
+    $mqtt = new OfflineFailingMqtt();
+    $api = new \App\Controllers\ApiController($db, $service, $mqtt, $logger);
+    $reset = $api->resetAuthorization($request, new \Slim\Psr7\Response(), ['id' => $bank]);
+    verify(json_decode((string) $reset->getBody(), true)['success'] && $mqtt->attempts === 1,
+        'MQTT publication failure invalidated completed local authorization transition');
 
     echo "FinTS authorization regression tests passed (offline; no bank requests).\n";
 } finally {

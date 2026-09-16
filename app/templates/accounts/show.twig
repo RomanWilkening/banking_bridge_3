@@ -87,6 +87,7 @@
                 <p x-show="dateRange !== '30'" x-cloak class="text-xs text-amber-600">
                     ⚠ Benötigt die Bank eine Freigabe, wird der Abruf ohne TAN-Anforderung beendet. Freigabe nur auf der Bankseite.
                 </p>
+                <a :href="authorizationUrl" class="text-sm text-primary-600 underline">Bankzugang für diesen Zeitraum freigeben →</a>
             </div>
         </div>
     </div>
@@ -370,6 +371,11 @@ function accountDetails(accountId, bankId) {
             const from = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
             const to = new Date().toISOString().split('T')[0];
             return { from, to };
+        },
+
+        get authorizationUrl() {
+            const { from, to } = this.getDateRange();
+            return `/banks/${this.bankId}?account_id=${this.accountId}&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}#authorization`;
         },
 
         async syncTransactions() {

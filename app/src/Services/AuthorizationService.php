@@ -200,7 +200,7 @@ class AuthorizationService
                 });
             $results = $result['results'] ?? [];
             foreach ($results['balances'] ?? [] as $id => $balance) {
-                $this->db->updateAccountBalance((int) $id, $balance['amount'], $balance['date']);
+                $this->db->updateAccountBalance((int) $id, $balance['amount'], $balance['date'], $balance['currency'] ?? null);
                 $stats['balances_updated']++;
             }
             foreach ($results['transactions'] ?? [] as $id => $transactions) {

@@ -58,6 +58,11 @@ veröffentlicht. Er enthält ausschließlich Verbindungs-ID, Status, maschinenle
 Grund und Zeitpunkte; keine Zugangsdaten, TAN oder Challenge. Home Assistant erhält
 passende Discovery-Einträge. Zustandswechsel werden lokal gespeichert und nach
 Broker-Ausfällen erneut veröffentlicht, ohne dafür eine Bankverbindung zu öffnen.
+Unveränderte Status- und Discovery-Nachrichten werden zusätzlich stündlich
+erneut veröffentlicht, damit ein Brokerverlust retained Daten nicht dauerhaft
+unsichtbar macht. Benachrichtigungen sollten auf Statuswechsel reagieren, nicht
+auf jede Wiederveröffentlichung. Die Veröffentlichung wartet auf MQTT-PUBACK;
+bei fehlender Bestätigung bleibt sie zur Wiederholung vorgemerkt.
 
 Banklöschung und Präfixwechsel werden beim nächsten erfolgreichen MQTT-Lauf auf
 dem aktuellen Broker bereinigt. Bei einem Brokerwechsel können retained Daten

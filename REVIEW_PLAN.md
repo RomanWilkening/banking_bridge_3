@@ -127,7 +127,7 @@ Sie werden vor Abschluss behoben, nicht als erledigt vorausgesetzt:
 | Manueller Abruf bisher nur letzte 30 Tage | Konto und gewählten Zeitraum ausdrücklich an Freigabe übergeben und durch TAN-Fortsetzungen erhalten | `fints-backend`, `authorization-ui` | In Arbeit |
 | Saldo-Währung bei manueller Speicherung verloren | Tatsächliche Bankwährung zusammen mit erfolgreichem Saldo speichern | `fints-backend` | In Arbeit |
 | Leere MT940-Antwort nach TAN ohne CAMT-Fallback | Format-/Fallbackzustand im manuellen Vorgang fortsetzen | `fints-backend` | In Arbeit |
-| Broker verliert retained Daten, lokale Hashes bleiben | Begrenzte periodische Neuveröffentlichung von Status **und** Discovery | `mqtt-status` | In Arbeit |
+| Broker verliert retained Daten, lokale Hashes bleiben | Stündliche Neuveröffentlichung von Status **und** Discovery; Zeitstempel erst nach allen ACKs aktualisieren | `mqtt-status` | Implementiert; neuer Protokolltest noch nicht vollständig erneut ausgeführt |
 | Challenge-Ablauf ohne Browser und ohne Auto-Sync | MQTT-Lauf aktualisiert lokale abgelaufene Vorgänge ohne Bankzugriff | `fints-backend`, `mqtt-status` | In Arbeit |
 | Zugangsdatenänderung während eines Vorgangs | Bankbezogene Sperre und lokale Invalidierung statt Verwendung gemischter Zugangsdaten | `fints-backend` | In Arbeit |
 

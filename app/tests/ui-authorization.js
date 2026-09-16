@@ -9,7 +9,7 @@ function page(name) {
     const calls = [], timers = new Map(), replies = [];
     let timerId = 0;
     const context = vm.createContext({
-        console, URL, Headers, Request, crypto: webcrypto, tailwind: {},
+        console, URL, URLSearchParams, Headers, Request, crypto: webcrypto, tailwind: {},
         location: { href: 'http://localhost/banks/1', origin: 'http://localhost', reload() {} },
         document: { querySelector() { return { content: 'test-csrf-token' }; } },
         confirm: () => true, alert() {},
@@ -175,6 +175,34 @@ async function run() {
     manualPoll.nextPollAt = 0;
     await manualPoll.checkDecoupledStatus(true);
     assert.equal(bank.calls.length, beforeManual + 1, 'Bank maximum check count must be respected');
+    const historyPage = page('account');
+    const historyAccount = historyPage.context.accountDetails(10, 1);
+    historyAccount.dateRange = 'custom';
+    historyAccount.customFrom = '2025-01-01';
+    historyAccount.customTo = '2025-12-31';
+    assert.equal(historyAccount.authorizationUrl, '/banks/1?account_id=10&from=2025-01-01&to=2025-12-31#authorization');
+    assert.equal(historyPage.calls.length, 0, 'Selecting historical context must not authorize');
+    const selectedPage = page('bank');
+    selectedPage.context.location.search = '?account_id=10&from=2025-01-01&to=2025-12-31';
+    const selected = selectedPage.context.bankDetails(1);
+    selected.init();
+    assert.equal(selected.authorizationAccountName, 'Test account');
+    assert.equal(selectedPage.calls.length, 0, 'Navigating with historical context must not authorize');
+    selectedPage.replies.push(pending, pending);
+    await selected.authorize();
+    const selectedBody = JSON.parse(selectedPage.calls[0].body);
+    assert.equal(selectedBody.account_id, 10);
+    assert.equal(selectedBody.from, '2025-01-01');
+    assert.equal(selectedBody.to, '2025-12-31');
+    assert.equal(selected.authorizationContext.from, '2025-01-01', 'Pending challenge retains selected range');
+    selected.destroy();
+    selectedPage.context.location.search = '?account_id=99&from=2025-02-30&to=2025-12-31';
+    const invalidSelection = selectedPage.context.bankDetails(1);
+    invalidSelection.init();
+    const beforeInvalid = selectedPage.calls.length;
+    await invalidSelection.authorize();
+    assert(invalidSelection.contextError);
+    assert.equal(selectedPage.calls.length, beforeInvalid, 'Invalid or foreign context must not silently authorize whole bank');
     console.log('PASS: rendered JavaScript syntax, safe sync isolation, explicit TAN/push/resume/cancel, UTC, CSRF and background toggle');
 }
 

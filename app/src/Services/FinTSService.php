@@ -135,7 +135,7 @@ class FinTSService
                         $discovered[] = [
                             'account_number' => $sepa->getAccountNumber(), 'iban' => $sepa->getIban(),
                             'bic' => $sepa->getBic(), 'sub_account' => $sepa->getSubAccount(),
-                            'account_type' => $this->detectAccountType($sepa), 'currency' => 'EUR',
+                            'account_type' => $this->detectAccountType($sepa),
                             'account_name' => 'Konto ' . substr($sepa->getIban() ?: $sepa->getAccountNumber(), -4),
                         ];
                     }

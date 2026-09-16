@@ -423,7 +423,7 @@ class ApiController
         
         // Update balances
         foreach ($results['balances'] as $accountId => $balance) {
-            $this->db->updateAccountBalance($accountId, $balance['amount'], $balance['date']);
+            $this->db->updateAccountBalance($accountId, $balance['amount'], $balance['date'], $balance['currency'] ?? null);
             $stats['balances_updated']++;
             
             $this->db->logActivity(
@@ -1396,7 +1396,7 @@ class ApiController
         
         // Update balances
         foreach ($results['balances'] ?? [] as $accountId => $balance) {
-            $this->db->updateAccountBalance($accountId, $balance['amount'], $balance['date']);
+            $this->db->updateAccountBalance($accountId, $balance['amount'], $balance['date'], $balance['currency'] ?? null);
             $stats['balances_updated']++;
         }
         

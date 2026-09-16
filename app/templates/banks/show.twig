@@ -141,7 +141,14 @@
                 Aktuelle TAN-Anfrage läuft ab: <span x-text="formatDate(operationExpiresAt)"></span>
             </p>
             <p class="mt-2 text-sm text-gray-500">Normale Abrufe und Hintergrund-Synchronisierung fordern niemals automatisch eine TAN an. Die lokale Freigabefrist ist eine Sicherheitsrichtlinie dieser Anwendung, keine von der Bank garantierte Gültigkeit. Auch eine gespeicherte technische Session belegt keine Freigabe. Gespeicherte Salden können veraltet sein.</p>
-            <button @click="authorize" :disabled="busy" class="mt-3 rounded-md bg-primary-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">
+            <div x-show="authorizationContext" x-cloak class="mt-3 rounded-md bg-blue-50 p-3 text-sm">
+                <p>Ausgewähltes Konto: <strong x-text="authorizationAccountName"></strong></p>
+                <p>Transaktionszeitraum: <span x-text="authorizationContext?.from"></span> bis <span x-text="authorizationContext?.to"></span></p>
+                <p>Der folgende Freigabe-Klick fordert diesen Zeitraum ausdrücklich an. Die Bank kann den verfügbaren Zeitraum begrenzen.</p>
+            </div>
+            <p x-show="contextError" x-cloak role="alert" class="mt-3 text-sm text-red-700" x-text="contextError"></p>
+            <a x-show="authorizationContext || contextError" href="/banks/{{ bank.id }}#authorization" class="mt-2 block text-sm text-primary-600">Auswahl entfernen – gesamten Bankzugang freigeben</a>
+            <button @click="authorize" :disabled="busy || !!contextError" class="mt-3 rounded-md bg-primary-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">
                 Bankzugang freigeben
             </button>
             <button x-show="authorization.status === 'pending'" @click="resumeAuthorization" :disabled="requestBusy" class="mt-3 rounded-md border px-4 py-2 text-sm">Freigabe fortsetzen</button>
@@ -1083,6 +1090,30 @@ function bankDetails(bankId) {
         operationExpiresAt: null,
         authorizationRequestId: null,
         nextPollAt: 0,
+        authorizationContext: null,
+        authorizationAccountName: '',
+        contextError: null,
+        authorizationAccounts: [{% for account in accounts %}{id: {{ account.id }}, name: '{{ (account.custom_name ?? account.account_name ?? account.iban ?? 'Konto')|e('js') }}'}{{ not loop.last ? ',' : '' }}{% endfor %}],
+
+        init() {
+            const params = new URLSearchParams(location.search);
+            if (!['account_id', 'from', 'to'].some(key => params.has(key))) return;
+            const accountId = params.get('account_id') || '';
+            const from = params.get('from') || '';
+            const to = params.get('to') || '';
+            const account = this.authorizationAccounts.find(item => String(item.id) === accountId);
+            const validDate = value => {
+                if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+                const date = new Date(value + 'T00:00:00Z');
+                return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
+            };
+            if (!account || !validDate(from) || !validDate(to) || from > to) {
+                this.contextError = 'Ungültige Konto-/Zeitraumauswahl. Bitte Auswahl entfernen oder erneut auf der Kontoseite wählen.';
+                return;
+            }
+            this.authorizationContext = { account_id: Number(accountId), from, to };
+            this.authorizationAccountName = account.name;
+        },
 
         get busy() {
             return this.loading || this.syncingBalances || this.syncingAll || this.resettingSession || this.requestBusy || this.manualAuthorization || this.authorization.status === 'pending';
@@ -1107,7 +1138,7 @@ function bankDetails(bankId) {
         },
 
         async authorize() {
-            if (this.busy) return;
+            if (this.busy || this.contextError) return;
             this.manualAuthorization = true;
             this.pollAttempts = 0;
             this.requestBusy = true;
@@ -1116,7 +1147,7 @@ function bankDetails(bankId) {
                 this.authorizationRequestId ??= Array.from(crypto.getRandomValues(new Uint8Array(24)), byte => byte.toString(16).padStart(2, '0')).join('');
                 const response = await fetch(`/api/banks/${this.bankId}/authorize`, {
                     method: 'POST', headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ request_id: this.authorizationRequestId })
+                    body: JSON.stringify({ request_id: this.authorizationRequestId, ...(this.authorizationContext || {}) })
                 });
                 const data = await response.json();
                 this.handleAuthorizationResponse(data);
