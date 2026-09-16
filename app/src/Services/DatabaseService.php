@@ -28,6 +28,8 @@ class DatabaseService
         $this->pdo = new PDO('sqlite:' . $this->dbPath);
         $this->pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
         $this->pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
+        $this->pdo->exec('PRAGMA foreign_keys = ON');
+        $this->pdo->exec('PRAGMA busy_timeout = 5000');
     }
 
     private function initializeSchema(): void
@@ -229,6 +231,22 @@ class DatabaseService
         if (!in_array('tan_manual_approval', $columnNames)) {
             $this->pdo->exec("ALTER TABLE accounts ADD COLUMN tan_manual_approval INTEGER DEFAULT 0");
         }
+
+        if (!in_array('background_sync_enabled', $columnNames)) {
+            $this->pdo->exec("ALTER TABLE accounts ADD COLUMN background_sync_enabled INTEGER NOT NULL DEFAULT 1");
+        }
+
+        $this->pdo->exec("
+            CREATE TABLE IF NOT EXISTS bank_authorization (
+                bank_id INTEGER PRIMARY KEY REFERENCES banks(id) ON DELETE CASCADE,
+                status TEXT NOT NULL DEFAULT 'unknown',
+                reason TEXT,
+                authenticated_at TEXT,
+                required_at TEXT,
+                updated_at TEXT NOT NULL,
+                expires_at TEXT
+            )
+        ");
         
         // Add exclude_from_total for per-account total balance control
         if (!in_array('exclude_from_total', $columnNames)) {
@@ -288,11 +306,45 @@ class DatabaseService
         if (!in_array('exclude_from_total', $paypalColumnNames)) {
             $this->pdo->exec("ALTER TABLE paypal_accounts ADD COLUMN exclude_from_total INTEGER DEFAULT 0");
         }
+
+        $transactionColumns = array_column($this->pdo->query("PRAGMA table_info(transactions)")->fetchAll(), 'name');
+        if (!in_array('source_transaction_id', $transactionColumns, true)) {
+            // Existing transaction_id values are local hashes, not bank references.
+            $this->pdo->exec("ALTER TABLE transactions ADD COLUMN source_transaction_id TEXT");
+        }
     }
 
     public function getPdo(): PDO
     {
         return $this->pdo;
+    }
+
+    private function financialTransaction(callable $operation): mixed
+    {
+        $nested = $this->pdo->inTransaction();
+        $savepoint = 'financial_' . bin2hex(random_bytes(8));
+        if ($nested) {
+            $this->pdo->exec("SAVEPOINT {$savepoint}");
+        } else {
+            $this->pdo->beginTransaction();
+        }
+        try {
+            $result = $operation();
+            if ($nested) {
+                $this->pdo->exec("RELEASE SAVEPOINT {$savepoint}");
+            } else {
+                $this->pdo->commit();
+            }
+            return $result;
+        } catch (\Throwable $e) {
+            if ($nested) {
+                $this->pdo->exec("ROLLBACK TO SAVEPOINT {$savepoint}");
+                $this->pdo->exec("RELEASE SAVEPOINT {$savepoint}");
+            } else {
+                $this->pdo->rollBack();
+            }
+            throw $e;
+        }
     }
 
     // Bank Methods
@@ -345,8 +397,13 @@ class DatabaseService
 
     public function deleteBank(int $id): bool
     {
-        $stmt = $this->pdo->prepare("DELETE FROM banks WHERE id = ?");
-        return $stmt->execute([$id]);
+        return $this->financialTransaction(function () use ($id): bool {
+            $stmt = $this->pdo->prepare("UPDATE accounts SET linked_depot_id = NULL WHERE linked_depot_id IN (SELECT id FROM accounts WHERE bank_id = ?)");
+            $stmt->execute([$id]);
+            $stmt = $this->pdo->prepare("DELETE FROM banks WHERE id = ?");
+            $stmt->execute([$id]);
+            return true;
+        });
     }
 
     // PayPal Account Methods
@@ -406,14 +463,14 @@ class DatabaseService
         return $stmt->execute([$id]);
     }
 
-    public function updatePayPalAccountBalance(int $id, float $balance, ?string $lastSync = null): bool
+    public function updatePayPalAccountBalance(int $id, float $balance, ?string $lastSync = null, ?string $currency = null): bool
     {
         $stmt = $this->pdo->prepare("
             UPDATE paypal_accounts 
-            SET balance = ?, last_sync = ?, updated_at = CURRENT_TIMESTAMP
+            SET balance = ?, last_sync = ?, currency = COALESCE(?, currency), updated_at = CURRENT_TIMESTAMP
             WHERE id = ?
         ");
-        return $stmt->execute([$balance, $lastSync ?? date('Y-m-d H:i:s'), $id]);
+        return $stmt->execute([$balance, $lastSync ?? gmdate('Y-m-d H:i:s'), $currency, $id]);
     }
 
     public function setPayPalAccountMqttExport(int $id, bool $enabled): bool
@@ -473,11 +530,13 @@ class DatabaseService
 
     public function savePayPalTransactions(int $paypalAccountId, array $transactions): array
     {
-        $newCount = 0;
-        foreach ($transactions as $tx) {
-            $newCount += $this->savePayPalTransaction($paypalAccountId, $tx);
-        }
-        return ['new' => $newCount, 'total' => count($transactions)];
+        return $this->financialTransaction(function () use ($paypalAccountId, $transactions): array {
+            $newCount = 0;
+            foreach ($transactions as $tx) {
+                $newCount += $this->savePayPalTransaction($paypalAccountId, $tx);
+            }
+            return ['new' => $newCount, 'total' => count($transactions)];
+        });
     }
 
     public function getPayPalTransactions(int $paypalAccountId, int $limit = 50, int $offset = 0): array
@@ -514,6 +573,99 @@ class DatabaseService
         return $stmt->fetchAll();
     }
 
+    public function getAccountsForBackgroundSync(int $bankId): array
+    {
+        $stmt = $this->pdo->prepare("SELECT * FROM accounts WHERE bank_id = ? AND background_sync_enabled = 1 AND is_active = 1 ORDER BY account_name");
+        $stmt->execute([$bankId]);
+        return $stmt->fetchAll();
+    }
+
+    public function setAccountBackgroundSync(int $accountId, bool $enabled): bool
+    {
+        $stmt = $this->pdo->prepare("UPDATE accounts SET background_sync_enabled = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?");
+        $stmt->execute([$enabled ? 1 : 0, $accountId]);
+        return $stmt->rowCount() > 0;
+    }
+
+    public function getBankAuthorizationState(int $bankId): array
+    {
+        return $this->financialTransaction(function () use ($bankId): array {
+            $now = gmdate('Y-m-d\TH:i:s\Z');
+            $maxAge = '+' . $this->authorizationMaxAgeDays() . ' days';
+            // This is a local maximum age, not a bank guarantee or the FinTS session lifetime.
+            $stmt = $this->pdo->prepare("
+                UPDATE bank_authorization
+                SET expires_at = COALESCE(strftime('%Y-%m-%dT%H:%M:%SZ', authenticated_at, ?), ?)
+                WHERE bank_id = ? AND status = 'authorized' AND expires_at IS NULL
+            ");
+            $stmt->execute([$maxAge, $now, $bankId]);
+            $stmt = $this->pdo->prepare("
+                UPDATE bank_authorization
+                SET status = 'required', reason = 'local_authorization_expired',
+                    required_at = COALESCE(required_at, :now), updated_at = :now
+                WHERE bank_id = :id AND status = 'authorized'
+                    AND (julianday(expires_at) IS NULL OR julianday(expires_at) <= julianday(:now))
+            ");
+            $stmt->execute([':now' => $now, ':id' => $bankId]);
+            $stmt = $this->pdo->prepare("SELECT * FROM bank_authorization WHERE bank_id = ?");
+            $stmt->execute([$bankId]);
+            return $stmt->fetch() ?: [
+                'bank_id' => $bankId,
+                'status' => 'unknown',
+                'reason' => 'not_authenticated',
+                'authenticated_at' => null,
+                'required_at' => null,
+                'updated_at' => null,
+                'expires_at' => null,
+            ];
+        });
+    }
+
+    private function authorizationMaxAgeDays(): int
+    {
+        $configured = $this->getSetting('fints_authorization_max_age_days', '90');
+        return preg_match('/^-?\d+$/D', $configured ?? '')
+            ? max(1, min(365, (int) $configured)) : 90;
+    }
+
+    /** Only completed explicit authorization may set the state to authorized. */
+    public function setBankAuthorizationState(int $bankId, string $status, ?string $reason = null): void
+    {
+        if (!in_array($status, ['unknown', 'authorized', 'required', 'pending', 'error'], true)) {
+            throw new \InvalidArgumentException('Invalid authorization state');
+        }
+        if ($reason !== null && !preg_match('/^[a-z0-9_]{1,80}$/D', $reason)) {
+            throw new \InvalidArgumentException('Authorization reasons must be safe machine identifiers');
+        }
+        $now = gmdate('Y-m-d\TH:i:s\Z');
+        $expires = $status === 'authorized'
+            ? gmdate('Y-m-d\TH:i:s\Z', strtotime($now) + $this->authorizationMaxAgeDays() * 86400) : null;
+        $stmt = $this->pdo->prepare("
+            INSERT INTO bank_authorization (bank_id, status, reason, authenticated_at, required_at, updated_at, expires_at)
+            VALUES (:id, :status, :reason, :authenticated, :required, :now, :expires)
+            ON CONFLICT(bank_id) DO UPDATE SET
+                status = excluded.status,
+                reason = excluded.reason,
+                authenticated_at = COALESCE(excluded.authenticated_at, bank_authorization.authenticated_at),
+                expires_at = CASE WHEN excluded.status = 'authorized'
+                    THEN excluded.expires_at ELSE bank_authorization.expires_at END,
+                required_at = CASE WHEN excluded.status = 'required'
+                    THEN COALESCE(bank_authorization.required_at, excluded.required_at)
+                    WHEN excluded.status = 'authorized' THEN NULL ELSE bank_authorization.required_at END,
+                updated_at = excluded.updated_at
+            WHERE bank_authorization.status != excluded.status
+                OR bank_authorization.reason IS NOT excluded.reason
+                OR excluded.status = 'authorized'
+        ");
+        $stmt->execute([
+            ':id' => $bankId, ':status' => $status, ':reason' => $reason,
+            ':authenticated' => $status === 'authorized' ? $now : null,
+            ':required' => $status === 'required' ? $now : null,
+            ':now' => $now,
+            ':expires' => $expires,
+        ]);
+    }
+
     public function upsertAccount(int $bankId, array $data): int
     {
         // Check if account exists (consider sub_account for uniqueness)
@@ -531,7 +683,7 @@ class DatabaseService
             $stmt = $this->pdo->prepare("
                 UPDATE accounts 
                 SET iban = ?, bic = ?, account_name = ?, owner_name = ?, account_type = ?, sub_account = ?,
-                    currency = ?, balance = ?, balance_date = ?, updated_at = CURRENT_TIMESTAMP
+                    currency = COALESCE(?, currency), balance = COALESCE(?, balance), balance_date = COALESCE(?, balance_date), updated_at = CURRENT_TIMESTAMP
                 WHERE id = ?
             ");
             $stmt->execute([
@@ -541,7 +693,7 @@ class DatabaseService
                 $data['owner_name'] ?? null,
                 $data['account_type'] ?? 'checking',
                 $data['sub_account'] ?? null,
-                $data['currency'] ?? 'EUR',
+                $data['currency'] ?? null,
                 $data['balance'] ?? null,
                 $data['balance_date'] ?? null,
                 $existing['id']
@@ -594,36 +746,36 @@ class DatabaseService
      */
     public function saveSecuritiesHoldings(int $accountId, array $holdings): int
     {
-        // Delete existing holdings
-        $stmt = $this->pdo->prepare("DELETE FROM securities_holdings WHERE account_id = ?");
-        $stmt->execute([$accountId]);
-        
-        $count = 0;
-        foreach ($holdings as $holding) {
-            $stmt = $this->pdo->prepare("
-                INSERT INTO securities_holdings 
-                (account_id, isin, wkn, name, quantity, currency, current_price, purchase_price, 
-                 total_value, profit_loss, profit_loss_percent, price_date)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ");
-            $stmt->execute([
-                $accountId,
-                $holding['isin'] ?? null,
-                $holding['wkn'] ?? null,
-                $holding['name'],
-                $holding['quantity'],
-                $holding['currency'] ?? 'EUR',
-                $holding['current_price'] ?? null,
-                $holding['purchase_price'] ?? null,
-                $holding['total_value'] ?? null,
-                $holding['profit_loss'] ?? null,
-                $holding['profit_loss_percent'] ?? null,
-                $holding['price_date'] ?? null
-            ]);
-            $count++;
-        }
-        
-        return $count;
+        return $this->financialTransaction(function () use ($accountId, $holdings): int {
+            $stmt = $this->pdo->prepare("DELETE FROM securities_holdings WHERE account_id = ?");
+            $stmt->execute([$accountId]);
+
+            $count = 0;
+            foreach ($holdings as $holding) {
+                $stmt = $this->pdo->prepare("
+                    INSERT INTO securities_holdings
+                    (account_id, isin, wkn, name, quantity, currency, current_price, purchase_price,
+                     total_value, profit_loss, profit_loss_percent, price_date)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ");
+                $stmt->execute([
+                    $accountId,
+                    $holding['isin'] ?? null,
+                    $holding['wkn'] ?? null,
+                    $holding['name'],
+                    $holding['quantity'],
+                    $holding['currency'] ?? 'EUR',
+                    $holding['current_price'] ?? null,
+                    $holding['purchase_price'] ?? null,
+                    $holding['total_value'] ?? null,
+                    $holding['profit_loss'] ?? null,
+                    $holding['profit_loss_percent'] ?? null,
+                    $holding['price_date'] ?? null
+                ]);
+                $count++;
+            }
+            return $count;
+        });
     }
     
     /**
@@ -701,11 +853,11 @@ class DatabaseService
         return (int) $this->pdo->lastInsertId();
     }
 
-    public function getFinTSSession(int $bankId): ?array
+    public function getFinTSSession(int $bankId, bool $includeExpired = false): ?array
     {
         $stmt = $this->pdo->prepare("
             SELECT * FROM fints_sessions 
-            WHERE bank_id = ? AND expires_at > datetime('now')
+            WHERE bank_id = ?" . ($includeExpired ? "" : " AND expires_at > datetime('now')") . "
             ORDER BY created_at DESC LIMIT 1
         ");
         $stmt->execute([$bankId]);
@@ -756,38 +908,57 @@ class DatabaseService
         return $result ?: null;
     }
 
-    /**
-     * Generate a unique transaction ID for deduplication
-     * Uses stable fields that don't change between syncs
-     */
+    private function normalizeTransaction(array $data): array
+    {
+        if (!isset($data['amount']) || !is_numeric($data['amount']) || !is_finite((float) $data['amount'])) {
+            throw new \InvalidArgumentException('A finite transaction amount is required');
+        }
+        $normalized = [];
+        foreach (['booking_date', 'valuta_date'] as $field) {
+            $date = trim((string) ($data[$field] ?? ''));
+            $normalized[$field] = $date === '' ? null : (new \DateTimeImmutable($date))->format('Y-m-d');
+        }
+        $normalized['amount'] = (float) $data['amount'] == 0.0 ? 0.0 : (float) $data['amount'];
+        $normalized['currency'] = strtoupper(trim((string) ($data['currency'] ?? 'EUR')));
+        foreach (['name', 'description', 'iban', 'bic', 'mandate_id', 'creditor_id',
+            'end_to_end_id', 'booking_text', 'prima_nota'] as $field) {
+            $normalized[$field] = trim((string) ($data[$field] ?? ''));
+        }
+        $normalized['source_transaction_id'] = trim((string) (
+            array_key_exists('source_transaction_id', $data)
+                ? $data['source_transaction_id'] : ($data['transaction_id'] ?? '')
+        ));
+        foreach (['source_transaction_id', 'end_to_end_id', 'prima_nota'] as $field) {
+            if (in_array(strtoupper($normalized[$field]), ['NOTPROVIDED', 'NONREF', 'NOT PROVIDED'], true)) {
+                $normalized[$field] = '';
+            }
+        }
+        return $normalized;
+    }
+
+    private function transactionReferences(array $data): array
+    {
+        return array_filter([
+            'source' => $data['source_transaction_id'],
+            'pn' => $data['prima_nota'],
+            'e2e' => $data['end_to_end_id'],
+        ], static fn(string $value): bool => $value !== '');
+    }
+
+    private function transactionFingerprint(array $data): string
+    {
+        return hash('sha256', json_encode($data, JSON_THROW_ON_ERROR));
+    }
+
     private function generateTransactionId(int $accountId, array $data): string
     {
-        // Priority: Use bank-provided unique identifiers if available
-        if (!empty($data['end_to_end_id']) && $data['end_to_end_id'] !== 'NOTPROVIDED') {
-            return md5($accountId . ':e2e:' . $data['end_to_end_id']);
-        }
-        
-        if (!empty($data['prima_nota'])) {
-            return md5($accountId . ':pn:' . $data['prima_nota'] . ':' . ($data['booking_date'] ?? ''));
-        }
-        
-        // Fallback: Create hash from normalized transaction details
-        // Normalize name: lowercase, trim, remove multiple spaces
-        $name = $data['name'] ?? '';
-        $name = mb_strtolower(trim($name));
-        $name = preg_replace('/\s+/', ' ', $name); // Multiple spaces -> single space
-        $name = substr($name, 0, 50); // Truncate to avoid minor variations at end
-        
-        // Normalize date to Y-m-d format
-        $date = $data['booking_date'] ?? '';
-        if ($date && strtotime($date)) {
-            $date = date('Y-m-d', strtotime($date));
-        }
-        
-        // Amount with fixed precision
-        $amount = number_format((float)($data['amount'] ?? 0), 2, '.', '');
-        
-        return md5($accountId . ':' . $date . ':' . $amount . ':' . $name);
+        $data = $this->normalizeTransaction($data);
+        $references = $this->transactionReferences($data);
+        // References can recur on later dates, or for different amounts/currencies.
+        $identity = $references ? [
+            $data['booking_date'], $data['amount'], $data['currency'], $references,
+        ] : $data;
+        return 'v2:' . $this->transactionFingerprint([$accountId, $identity]);
     }
 
     /**
@@ -801,74 +972,12 @@ class DatabaseService
     }
 
     /**
-     * Save a single transaction (insert or update)
+     * Save a single transaction. Use saveTransactions for reference-less batch multiplicity.
      * Returns 1 if new, 0 if skipped (duplicate)
      */
     public function saveTransaction(int $accountId, array $data): int
     {
-        // Normalize the data for consistent comparison
-        $bookingDate = $data['booking_date'] ?? null;
-        if ($bookingDate && strtotime($bookingDate)) {
-            $bookingDate = date('Y-m-d', strtotime($bookingDate));
-        }
-        
-        $amount = round((float)($data['amount'] ?? 0), 2);
-        $name = trim($data['name'] ?? '');
-        $nameLower = mb_strtolower($name);
-        
-        // First: Check if an identical transaction already exists (data-based check)
-        // Uses idx_transactions_dedup index for fast lookup on (account_id, booking_date, amount)
-        // Then filters by name in PHP for exact match (avoids LOWER() on DB side which can't use index)
-        $existingStmt = $this->pdo->prepare("
-            SELECT id, name FROM transactions 
-            WHERE account_id = ? 
-              AND booking_date = ? 
-              AND amount = ?
-        ");
-        $existingStmt->execute([$accountId, $bookingDate, $amount]);
-        
-        // Check name match in PHP (faster than DB-side LOWER for small result sets)
-        while ($row = $existingStmt->fetch()) {
-            $existingName = mb_strtolower(trim($row['name'] ?? ''));
-            if ($existingName === $nameLower) {
-                // Transaction already exists - skip
-                return 0;
-            }
-        }
-        // No duplicate found - not an exact match
-        
-        // Generate a unique transaction ID for new transactions
-        $transactionId = $this->generateTransactionId($accountId, $data);
-
-        // Insert new transaction (use INSERT OR IGNORE as extra safety)
-        $stmt = $this->pdo->prepare("
-            INSERT OR IGNORE INTO transactions (
-                account_id, transaction_id, booking_date, valuta_date, amount, currency,
-                name, description, iban, bic, mandate_id, creditor_id, 
-                end_to_end_id, booking_text, prima_nota
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ");
-        
-        $stmt->execute([
-            $accountId,
-            $transactionId,
-            $bookingDate,
-            $data['valuta_date'] ?? null,
-            $amount,
-            $data['currency'] ?? 'EUR',
-            $name,
-            $data['description'] ?? null,
-            $data['iban'] ?? null,
-            $data['bic'] ?? null,
-            $data['mandate_id'] ?? null,
-            $data['creditor_id'] ?? null,
-            $data['end_to_end_id'] ?? null,
-            $data['booking_text'] ?? null,
-            $data['prima_nota'] ?? null
-        ]);
-        
-        // Return 1 if a row was actually inserted
-        return $stmt->rowCount() > 0 ? 1 : 0;
+        return $this->saveTransactions($accountId, [$data])['new'];
     }
 
     /**
@@ -877,23 +986,61 @@ class DatabaseService
      */
     public function saveTransactions(int $accountId, array $transactions): array
     {
-        $newCount = 0;
-        $updatedCount = 0;
-        
-        foreach ($transactions as $transaction) {
-            $result = $this->saveTransaction($accountId, $transaction);
-            if ($result === 1) {
+        return $this->financialTransaction(function () use ($accountId, $transactions): array {
+            $newCount = 0;
+            $occurrences = [];
+            $existingStmt = $this->pdo->prepare("
+                SELECT * FROM transactions
+                WHERE account_id = ? AND booking_date IS ? AND amount = ? ORDER BY id
+            ");
+            foreach ($transactions as $transaction) {
+                $data = $this->normalizeTransaction($transaction);
+                $identity = $this->generateTransactionId($accountId, $data);
+                $strong = $this->transactionReferences($data) !== [];
+                $occurrence = $strong ? 1 : ($occurrences[$identity] ?? 0) + 1;
+                $occurrences[$identity] = $occurrence;
+                $existingStmt->execute([$accountId, $data['booking_date'], $data['amount']]);
+                $matches = 0;
+                $legacyMatch = null;
+                foreach ($existingStmt->fetchAll() as $row) {
+                    $existing = $this->normalizeTransaction($row);
+                    if ($this->generateTransactionId($accountId, $existing) === $identity) {
+                        $matches++;
+                    } elseif ($data['source_transaction_id'] !== ''
+                        && $row['source_transaction_id'] === null) {
+                        // Older imports discarded bank IDs. Adopt only a full semantic match,
+                        // once, never the old coarse date/amount/name hash.
+                        $withoutSource = $data;
+                        $withoutSource['source_transaction_id'] = '';
+                        if ($withoutSource === $existing) {
+                            $legacyMatch ??= $row['id'];
+                        }
+                    }
+                }
+                if ($matches >= $occurrence) {
+                    continue;
+                }
+                if ($legacyMatch !== null) {
+                    $stmt = $this->pdo->prepare("UPDATE transactions SET source_transaction_id = ? WHERE id = ?");
+                    $stmt->execute([$data['source_transaction_id'], $legacyMatch]);
+                    continue;
+                }
+                $transactionId = $identity;
+                $suffix = 1;
+                // Never let an old or colliding local ID silently discard a real payment.
+                while ($this->transactionExists($accountId, $transactionId)) {
+                    $transactionId = $identity . ':' . ++$suffix;
+                }
+                $columns = array_keys($data);
+                $stmt = $this->pdo->prepare(
+                    "INSERT INTO transactions (account_id, transaction_id, " . implode(', ', $columns) . ")
+                     VALUES (?, ?, " . implode(', ', array_fill(0, count($columns), '?')) . ")"
+                );
+                $stmt->execute(array_merge([$accountId, $transactionId], array_values($data)));
                 $newCount++;
-            } else {
-                $updatedCount++;
             }
-        }
-        
-        return [
-            'new' => $newCount,
-            'updated' => $updatedCount,
-            'total' => $newCount + $updatedCount
-        ];
+            return ['new' => $newCount, 'updated' => count($transactions) - $newCount, 'total' => count($transactions)];
+        });
     }
 
     public function getTransactionsByAccountId(int $accountId, int $limit = 30, int $offset = 0, array $filters = []): array
@@ -979,52 +1126,36 @@ class DatabaseService
         return $result['latest'] ?? null;
     }
 
-    /**
-     * Find duplicate transactions across all accounts or for a specific account
-     * Duplicates are identified by: same account, date, amount, name, and description
-     */
+    private function duplicateTransactionGroups(?int $accountId): array
+    {
+        $stmt = $this->pdo->prepare("
+            SELECT t.*, a.account_name, b.name AS bank_name
+            FROM transactions t
+            LEFT JOIN accounts a ON t.account_id = a.id
+            LEFT JOIN banks b ON a.bank_id = b.id
+            " . ($accountId !== null ? "WHERE t.account_id = ?" : "") . "
+            ORDER BY t.id
+        ");
+        $stmt->execute($accountId !== null ? [$accountId] : []);
+        $groups = [];
+        foreach ($stmt->fetchAll() as $row) {
+            $data = $this->normalizeTransaction($row);
+            // Identical reference-less rows may be separate real payments.
+            if ($this->transactionReferences($data) === []) {
+                continue;
+            }
+            $identity = $this->generateTransactionId((int) $row['account_id'], $data);
+            // Maintenance is stricter than import: retain conflicting details for review.
+            $key = $identity . ':' . $this->transactionFingerprint($data);
+            $groups[$key][] = $row;
+        }
+        return array_values(array_filter($groups, static fn(array $group): bool => count($group) > 1));
+    }
+
     public function findDuplicateTransactions(?int $accountId = null): array
     {
-        $sql = "
-            SELECT 
-                t1.id,
-                t1.account_id,
-                t1.booking_date,
-                t1.amount,
-                t1.name,
-                t1.description,
-                t1.transaction_id,
-                t1.created_at,
-                a.account_name,
-                a.iban,
-                b.name as bank_name
-            FROM transactions t1
-            INNER JOIN (
-                SELECT 
-                    account_id, 
-                    booking_date, 
-                    amount, 
-                    COALESCE(name, '') as name, 
-                    COALESCE(description, '') as description,
-                    COUNT(*) as cnt,
-                    MIN(id) as keep_id
-                FROM transactions
-                " . ($accountId ? "WHERE account_id = ?" : "") . "
-                GROUP BY account_id, booking_date, amount, COALESCE(name, ''), COALESCE(description, '')
-                HAVING COUNT(*) > 1
-            ) t2 ON t1.account_id = t2.account_id 
-                AND t1.booking_date = t2.booking_date 
-                AND t1.amount = t2.amount 
-                AND COALESCE(t1.name, '') = t2.name 
-                AND COALESCE(t1.description, '') = t2.description
-            LEFT JOIN accounts a ON t1.account_id = a.id
-            LEFT JOIN banks b ON a.bank_id = b.id
-            ORDER BY t1.account_id, t1.booking_date DESC, t1.amount, t1.id
-        ";
-        
-        $stmt = $this->pdo->prepare($sql);
-        $stmt->execute($accountId ? [$accountId] : []);
-        return $stmt->fetchAll();
+        $groups = $this->duplicateTransactionGroups($accountId);
+        return $groups ? array_merge(...$groups) : [];
     }
 
     /**
@@ -1032,31 +1163,16 @@ class DatabaseService
      */
     public function getDuplicateSummary(?int $accountId = null): array
     {
-        $sql = "
-            SELECT 
-                account_id,
-                booking_date,
-                amount,
-                COALESCE(name, '') as name,
-                COALESCE(description, '') as description,
-                COUNT(*) as duplicate_count,
-                MIN(id) as keep_id
-            FROM transactions
-            " . ($accountId ? "WHERE account_id = ?" : "") . "
-            GROUP BY account_id, booking_date, amount, COALESCE(name, ''), COALESCE(description, '')
-            HAVING COUNT(*) > 1
-            ORDER BY duplicate_count DESC, booking_date DESC
-        ";
-        
-        $stmt = $this->pdo->prepare($sql);
-        $stmt->execute($accountId ? [$accountId] : []);
-        $results = $stmt->fetchAll();
-        
+        $results = [];
         $totalDuplicates = 0;
         $totalToRemove = 0;
-        foreach ($results as $row) {
-            $totalDuplicates += $row['duplicate_count'];
-            $totalToRemove += $row['duplicate_count'] - 1; // Keep one of each
+        foreach ($this->duplicateTransactionGroups($accountId) as $group) {
+            $row = $group[0];
+            $row['keep_id'] = $row['id'];
+            $row['duplicate_count'] = count($group);
+            $results[] = $row;
+            $totalDuplicates += count($group);
+            $totalToRemove += count($group) - 1;
         }
         
         return [
@@ -1073,36 +1189,17 @@ class DatabaseService
      */
     public function removeDuplicateTransactions(?int $accountId = null): int
     {
-        // First, find all IDs to delete (all duplicates except the one with lowest ID in each group)
-        $sql = "
-            DELETE FROM transactions
-            WHERE id IN (
-                SELECT t1.id
-                FROM transactions t1
-                INNER JOIN (
-                    SELECT 
-                        account_id, 
-                        booking_date, 
-                        amount, 
-                        COALESCE(name, '') as name, 
-                        COALESCE(description, '') as description,
-                        MIN(id) as keep_id
-                    FROM transactions
-                    " . ($accountId ? "WHERE account_id = ?" : "") . "
-                    GROUP BY account_id, booking_date, amount, COALESCE(name, ''), COALESCE(description, '')
-                    HAVING COUNT(*) > 1
-                ) t2 ON t1.account_id = t2.account_id 
-                    AND t1.booking_date = t2.booking_date 
-                    AND t1.amount = t2.amount 
-                    AND COALESCE(t1.name, '') = t2.name 
-                    AND COALESCE(t1.description, '') = t2.description
-                    AND t1.id != t2.keep_id
-            )
-        ";
-        
-        $stmt = $this->pdo->prepare($sql);
-        $stmt->execute($accountId ? [$accountId] : []);
-        return $stmt->rowCount();
+        return $this->financialTransaction(function () use ($accountId): int {
+            $stmt = $this->pdo->prepare("DELETE FROM transactions WHERE id = ?");
+            $count = 0;
+            foreach ($this->duplicateTransactionGroups($accountId) as $group) {
+                foreach (array_slice($group, 1) as $row) {
+                    $stmt->execute([$row['id']]);
+                    $count += $stmt->rowCount();
+                }
+            }
+            return $count;
+        });
     }
 
     /**
@@ -1111,29 +1208,27 @@ class DatabaseService
      */
     public function regenerateTransactionIds(?int $accountId = null): int
     {
-        $sql = "SELECT id, account_id, booking_date, amount, name, description, end_to_end_id, prima_nota 
-                FROM transactions" . ($accountId ? " WHERE account_id = ?" : "");
-        $stmt = $this->pdo->prepare($sql);
-        $stmt->execute($accountId ? [$accountId] : []);
-        $transactions = $stmt->fetchAll();
-        
-        $updateStmt = $this->pdo->prepare("UPDATE transactions SET transaction_id = ? WHERE id = ?");
-        $count = 0;
-        
-        foreach ($transactions as $tx) {
-            $newId = $this->generateTransactionId($tx['account_id'], [
-                'booking_date' => $tx['booking_date'],
-                'amount' => $tx['amount'],
-                'name' => $tx['name'],
-                'description' => $tx['description'],
-                'end_to_end_id' => $tx['end_to_end_id'],
-                'prima_nota' => $tx['prima_nota']
-            ]);
-            $updateStmt->execute([$newId, $tx['id']]);
-            $count++;
-        }
-        
-        return $count;
+        return $this->financialTransaction(function () use ($accountId): int {
+            $where = $accountId !== null ? " WHERE account_id = ?" : "";
+            $params = $accountId !== null ? [$accountId] : [];
+            $stmt = $this->pdo->prepare("SELECT * FROM transactions{$where} ORDER BY id");
+            $stmt->execute($params);
+            $transactions = $stmt->fetchAll();
+
+            // Free the old namespace first, so swaps and existing target IDs cannot collide.
+            $stmt = $this->pdo->prepare("UPDATE transactions SET transaction_id = NULL{$where}");
+            $stmt->execute($params);
+            $updateStmt = $this->pdo->prepare("UPDATE transactions SET transaction_id = ? WHERE id = ?");
+            $occurrences = [];
+            foreach ($transactions as $tx) {
+                $identity = $this->generateTransactionId((int) $tx['account_id'], $tx);
+                $occurrence = ($occurrences[$identity] ?? 0) + 1;
+                $occurrences[$identity] = $occurrence;
+                $newId = $identity . ($occurrence > 1 ? ':' . $occurrence : '');
+                $updateStmt->execute([$newId, $tx['id']]);
+            }
+            return count($transactions);
+        });
     }
 
     public function updateAccountBalance(int $accountId, float $balance, ?string $balanceDate = null): bool
@@ -1143,7 +1238,7 @@ class DatabaseService
             SET balance = ?, balance_date = ?, updated_at = CURRENT_TIMESTAMP
             WHERE id = ?
         ");
-        return $stmt->execute([$balance, $balanceDate ?? date('Y-m-d H:i:s'), $accountId]);
+        return $stmt->execute([$balance, $balanceDate ?? gmdate('Y-m-d H:i:s'), $accountId]);
     }
 
     // Bank Capabilities Methods

@@ -6,11 +6,13 @@ namespace App\Services;
 use PhpMqtt\Client\MqttClient;
 use PhpMqtt\Client\ConnectionSettings;
 use PhpMqtt\Client\Exceptions\MqttClientException;
+use PhpMqtt\Client\Repositories\MemoryRepository;
 use Monolog\Logger;
 
 class MqttService
 {
     private ?MqttClient $client = null;
+    private ?MemoryRepository $repository = null;
     private Logger $logger;
     private DatabaseService $db;
     
@@ -26,7 +28,7 @@ class MqttService
     public function isEnabled(): bool
     {
         $enabled = $this->db->getSetting('mqtt_enabled', '0') === '1';
-        $host = $this->db->getSetting('mqtt_host', '');
+        $host = $this->getConfig()['host'];
         
         return $enabled && !empty($host);
     }
@@ -37,12 +39,12 @@ class MqttService
     private function getConfig(): array
     {
         return [
-            'host' => $this->db->getSetting('mqtt_host', ''),
-            'port' => (int) $this->db->getSetting('mqtt_port', '1883'),
-            'username' => $this->db->getSetting('mqtt_user', ''),
-            'password' => $this->db->getSetting('mqtt_password', ''),
-            'topic_prefix' => $this->db->getSetting('mqtt_topic_prefix', 'banking'),
-            'client_id' => 'banking_bridge_' . substr(md5(gethostname()), 0, 8),
+            'host' => $this->db->getSetting('mqtt_host', getenv('MQTT_HOST') ?: ''),
+            'port' => (int) $this->db->getSetting('mqtt_port', getenv('MQTT_PORT') ?: '1883'),
+            'username' => $this->db->getSetting('mqtt_user', getenv('MQTT_USER') ?: ''),
+            'password' => $this->db->getSetting('mqtt_password', getenv('MQTT_PASSWORD') ?: ''),
+            'topic_prefix' => trim($this->db->getSetting('mqtt_topic_prefix', getenv('MQTT_TOPIC_PREFIX') ?: 'banking'), '/'),
+            'client_id' => 'bb_' . bin2hex(random_bytes(10)),
         ];
     }
     
@@ -79,10 +81,13 @@ class MqttService
         ]);
         
         try {
+            $this->repository = new MemoryRepository();
             $this->client = new MqttClient(
                 $config['host'],
                 $config['port'],
-                $config['client_id']
+                $config['client_id'],
+                MqttClient::MQTT_3_1_1,
+                $this->repository
             );
             
             $connectionSettings = (new ConnectionSettings())
@@ -98,7 +103,7 @@ class MqttService
                 $connectionSettings->setPassword($config['password']);
             }
             
-            $this->client->connect($connectionSettings);
+            $this->client->connect($connectionSettings, true);
             
             $this->logger->info('MQTT connected successfully', ['host' => $config['host']]);
             return true;
@@ -149,14 +154,196 @@ class MqttService
      */
     private function disconnect(): void
     {
-        if ($this->client !== null && $this->client->isConnected()) {
-            try {
+        try {
+            if ($this->client !== null && $this->client->isConnected()) {
                 $this->client->disconnect();
-            } catch (\Throwable $e) {
-                // Ignore disconnect errors
             }
+        } catch (\Throwable $e) {
+            // A failed publication remains pending in the durable inventory.
         }
         $this->client = null;
+        $this->repository = null;
+    }
+
+    private function flushPublications(): void
+    {
+        if ($this->client === null || $this->repository === null) {
+            throw new \RuntimeException('MQTT not connected');
+        }
+        // php-mqtt/client 1.8 returns normally on timeout and disconnect does not flush.
+        $this->client->loop(true, true, 10);
+        if ($this->repository->countPendingOutgoingMessages() !== 0) {
+            throw new \RuntimeException('MQTT acknowledgement timed out');
+        }
+    }
+
+    /**
+     * Publish local authorization knowledge without contacting a bank or exporting balances.
+     * Inventory is retained per broker: switching brokers cannot erase the old broker's
+     * retained messages without its connection settings/credentials. Return a warning
+     * and keep that inventory so switching back can reconcile it.
+     */
+    public function publishAuthorizationStates(): array
+    {
+        if (!$this->isEnabled()) {
+            return ['success' => false, 'message' => 'MQTT nicht aktiviert', 'published' => 0];
+        }
+        $published = 0;
+        $warnings = [];
+        $lock = null;
+        try {
+            $database = $this->db->getPdo()->query('PRAGMA database_list')->fetchAll(\PDO::FETCH_ASSOC);
+            $directory = !empty($database[0]['file']) ? dirname($database[0]['file']) : dirname(__DIR__, 2);
+            $lock = fopen($directory . '/mqtt-authorization.lock', 'c');
+            if ($lock === false || !flock($lock, LOCK_EX | LOCK_NB)) {
+                throw new \RuntimeException('MQTT authorization publisher is already running or lock unavailable');
+            }
+            $config = $this->getConfig();
+            $prefix = $config['topic_prefix'];
+            if ($prefix === '' || strpbrk($prefix, "+#\0") !== false) {
+                throw new \RuntimeException('Invalid MQTT topic prefix');
+            }
+            $desired = $this->authorizationTopics($prefix);
+            $inventory = json_decode($this->db->getSetting('mqtt_authorization_publications', '{}'), true, 512, JSON_THROW_ON_ERROR);
+            if (!is_array($inventory)) {
+                throw new \RuntimeException('Invalid MQTT publication inventory');
+            }
+            $broker = hash('sha256', json_encode([$config['host'], $config['port']], JSON_THROW_ON_ERROR));
+            foreach ($inventory as $key => $entry) {
+                if ($key !== $broker && !empty($entry['topics'])) {
+                    $warnings[] = 'Retained authorization topics remain on a previous broker; reconnect to that broker to reconcile them.';
+                    break;
+                }
+            }
+            $inventory[$broker] ??= ['topics' => []];
+            $topics = &$inventory[$broker]['topics'];
+            $changes = [];
+            foreach ($topics as $topic => $hash) {
+                if (!array_key_exists($topic, $desired)) {
+                    $changes[$topic] = '';
+                }
+            }
+            foreach ($desired as $topic => $payload) {
+                if (($topics[$topic] ?? null) !== hash('sha256', $payload)) {
+                    $changes[$topic] = $payload;
+                }
+            }
+            if ($changes !== []) {
+                if (!$this->connect()) {
+                    throw new \RuntimeException('MQTT-Verbindung fehlgeschlagen');
+                }
+                foreach ($changes as $topic => $payload) {
+                    // Record intent before sending: even a crash after broker ACK can be cleaned up.
+                    $topics[$topic] = null;
+                }
+                $this->saveAuthorizationInventory($inventory);
+                foreach ($changes as $topic => $payload) {
+                    $this->client->publish($topic, $payload, MqttClient::QOS_AT_LEAST_ONCE, true);
+                    $this->flushPublications();
+                    if ($payload === '') {
+                        unset($topics[$topic]);
+                    } else {
+                        $topics[$topic] = hash('sha256', $payload);
+                    }
+                    $this->saveAuthorizationInventory($inventory);
+                    $published++;
+                }
+            }
+            foreach ($warnings as $warning) {
+                $this->logger->warning($warning);
+            }
+            return ['success' => true, 'message' => "{$published} Autorisierungsthemen veröffentlicht",
+                'published' => $published, 'errors' => [], 'warnings' => $warnings];
+        } catch (\Throwable $e) {
+            $this->logger->error('MQTT authorization publication failed', ['error' => $e->getMessage()]);
+            return ['success' => false, 'message' => $e->getMessage(), 'published' => $published,
+                'errors' => [$e->getMessage()], 'warnings' => $warnings];
+        } finally {
+            $this->disconnect();
+            if (is_resource($lock)) {
+                flock($lock, LOCK_UN);
+                fclose($lock);
+            }
+        }
+    }
+
+    private function saveAuthorizationInventory(array $inventory): void
+    {
+        if (!$this->db->setSetting('mqtt_authorization_publications', json_encode($inventory, JSON_THROW_ON_ERROR))) {
+            throw new \RuntimeException('Could not persist MQTT publication inventory');
+        }
+    }
+
+    private function authorizationTopics(string $prefix): array
+    {
+        $topics = [];
+        foreach ($this->db->getAllBanks() as $bank) {
+            $bankId = (int) $bank['id'];
+            $raw = $this->db->getBankAuthorizationState($bankId);
+            $status = in_array($raw['status'] ?? null, ['unknown', 'authorized', 'required', 'pending', 'error'], true)
+                ? $raw['status'] : 'unknown';
+            $payload = ['bank_id' => $bankId, 'status' => $status, 'reason' => $this->authorizationReason($raw['reason'] ?? null)];
+            foreach (['authenticated_at', 'required_at', 'updated_at', 'expires_at'] as $field) {
+                $payload[$field] = $this->authorizationTimestamp($raw[$field] ?? null);
+            }
+            $payload['expiry_basis'] = $payload['expires_at'] === null ? null : 'local_policy';
+            $this->addAuthorizationTopics(
+                $topics,
+                "{$prefix}/banks/{$bankId}/authorization",
+                "bank_{$bankId}",
+                $payload,
+                (string) ($bank['name'] ?? "Bank connection {$bankId}")
+            );
+        }
+        return $topics;
+    }
+
+    private function authorizationTimestamp(mixed $value): ?string
+    {
+        if (!is_string($value) || !preg_match('/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})?$/D', $value)) {
+            return null;
+        }
+        try {
+            return (new \DateTimeImmutable($value, new \DateTimeZone('UTC')))
+                ->setTimezone(new \DateTimeZone('UTC'))->format('Y-m-d\TH:i:s\Z');
+        } catch (\Throwable $e) {
+            return null;
+        }
+    }
+
+    private function authorizationReason(mixed $reason): ?string
+    {
+        if ($reason === null) {
+            return null;
+        }
+        return in_array($reason, ['authorization_expired', 'local_authorization_expired', 'authentication_required', 'authorization_required',
+            'tan_required', 'tan_pending', 'sca_required', 'sca_pending', 'session_expired', 'session_missing',
+            'authentication_failed', 'authorization_failed', 'bank_error', 'network_error', 'manual_authorization',
+            'authorization_completed', 'automatic_tan_prevention_unavailable', 'legacy_session', 'unknown'], true) ? $reason : 'unspecified';
+    }
+
+    private function addAuthorizationTopics(array &$topics, string $stateTopic, string $id, array $payload, string $bankName): void
+    {
+        $uniqueId = 'banking_authorization_' . $id;
+        $discovery = [
+            'name' => 'Authorization required',
+            'unique_id' => $uniqueId,
+            'object_id' => $uniqueId,
+            'state_topic' => $stateTopic,
+            'device_class' => 'problem',
+            'payload_on' => 'ON',
+            'payload_off' => 'OFF',
+            'value_template' => "{{ 'OFF' if value_json.status == 'authorized' else ('ON' if value_json.status in ['required', 'pending', 'error'] else 'None') }}",
+            'json_attributes_topic' => $stateTopic,
+            'device' => [
+                'identifiers' => ['banking_bridge_' . $id],
+                'name' => $bankName,
+                'manufacturer' => 'Banking Bridge',
+                'model' => 'Authorization',
+            ],
+        ];
+        $topics["homeassistant/binary_sensor/{$uniqueId}/config"] = json_encode($discovery, JSON_THROW_ON_ERROR);
+        $topics[$stateTopic] = json_encode($payload, JSON_THROW_ON_ERROR);
     }
     
     /**
@@ -171,6 +358,7 @@ class MqttService
             return ['success' => false, 'message' => 'MQTT nicht aktiviert'];
         }
         
+        $authorization = $this->publishAuthorizationStates();
         if (!$this->connect()) {
             return ['success' => false, 'message' => 'MQTT-Verbindung fehlgeschlagen'];
         }
@@ -178,7 +366,7 @@ class MqttService
         $config = $this->getConfig();
         $topicPrefix = $config['topic_prefix'];
         $published = 0;
-        $errors = [];
+        $errors = $authorization['success'] ? [] : ['Authorization: ' . $authorization['message']];
         $details = [];
         
         try {
@@ -278,11 +466,13 @@ class MqttService
             }
             
             return [
-                'success' => true,
+                'success' => empty($errors),
                 'message' => $message,
                 'published' => $published,
                 'errors' => $errors,
-                'details' => $details
+                'details' => $details,
+                'authorization' => $authorization,
+                'warnings' => $authorization['warnings'] ?? [],
             ];
             
         } catch (\Throwable $e) {
@@ -337,8 +527,7 @@ class MqttService
         $icon = $accountType === 'depot' ? 'mdi:chart-line' : 'mdi:bank';
         $deviceClass = 'monetary';
         
-        // Handle null/empty balance - use 0 as default
-        $balanceValue = $balance !== null ? round((float) $balance, 2) : 0;
+        $balanceValue = $balance !== null && $balance !== '' ? round((float) $balance, 2) : null;
         
         // Discovery payload for Home Assistant
         $discoveryPayload = [
@@ -346,7 +535,7 @@ class MqttService
             'unique_id' => $uniqueId,
             'object_id' => $uniqueId, // Helps with entity_id creation
             'state_topic' => $stateTopic,
-            'value_template' => '{{ value_json.balance }}',
+            'value_template' => "{{ value_json.balance if value_json.balance is not none else 'None' }}",
             'unit_of_measurement' => $currency,
             'device_class' => $deviceClass,
             'state_class' => 'total',
@@ -371,7 +560,9 @@ class MqttService
             'bank' => $bankName,
             'iban' => $iban,
             'account_id' => $accountId,
-            'last_update' => date('c'),
+            'last_update' => $account['balance_date'] ?? null,
+            'balance_date' => $account['balance_date'] ?? null,
+            'published_at' => gmdate('Y-m-d\TH:i:s\Z'),
         ];
         
         $discoveryJson = json_encode($discoveryPayload, JSON_UNESCAPED_UNICODE);
@@ -403,6 +594,7 @@ class MqttService
             MqttClient::QOS_AT_LEAST_ONCE,
             true // retained
         );
+        $this->flushPublications();
         
         $this->logger->debug('Published discovery', ['topic' => $discoveryTopic]);
         
@@ -421,6 +613,7 @@ class MqttService
             MqttClient::QOS_AT_LEAST_ONCE,
             true // retained
         );
+        $this->flushPublications();
         
         $this->logger->info('Published account to MQTT', [
             'account_id' => $accountId,
@@ -469,7 +662,7 @@ class MqttService
         $discoveryTopic = "homeassistant/sensor/{$uniqueId}/config";
         
         // Handle null/empty balance
-        $balanceValue = $balance !== null ? round((float) $balance, 2) : 0;
+        $balanceValue = $balance !== null && $balance !== '' ? round((float) $balance, 2) : null;
         
         // Discovery payload for Home Assistant
         $discoveryPayload = [
@@ -477,7 +670,7 @@ class MqttService
             'unique_id' => $uniqueId,
             'object_id' => $uniqueId,
             'state_topic' => $stateTopic,
-            'value_template' => '{{ value_json.balance }}',
+            'value_template' => "{{ value_json.balance if value_json.balance is not none else 'None' }}",
             'unit_of_measurement' => $currency,
             'device_class' => 'monetary',
             'state_class' => 'total',
@@ -499,11 +692,13 @@ class MqttService
             'account_name' => $accountName,
             'email' => $email,
             'provider' => 'PayPal',
-            'last_updated' => date('c'),
+            'last_updated' => $paypal['last_sync'] ?? null,
+            'last_sync' => $paypal['last_sync'] ?? null,
+            'published_at' => gmdate('Y-m-d\TH:i:s\Z'),
         ];
         
-        $discoveryJson = json_encode($discoveryPayload);
-        $stateJson = json_encode($statePayload);
+        $discoveryJson = json_encode($discoveryPayload, JSON_THROW_ON_ERROR);
+        $stateJson = json_encode($statePayload, JSON_THROW_ON_ERROR);
         
         if (!$this->ensureConnected()) {
             throw new \RuntimeException('MQTT connection lost');
@@ -516,6 +711,7 @@ class MqttService
             MqttClient::QOS_AT_LEAST_ONCE,
             true
         );
+        $this->flushPublications();
         
         usleep(50000);
         
@@ -530,6 +726,7 @@ class MqttService
             MqttClient::QOS_AT_LEAST_ONCE,
             true
         );
+        $this->flushPublications();
         
         $this->logger->info('Published PayPal to MQTT', [
             'paypal_id' => $paypalId,
@@ -565,6 +762,7 @@ class MqttService
                 MqttClient::QOS_AT_LEAST_ONCE,
                 true
             );
+            $this->flushPublications();
             
             $this->disconnect();
             return true;

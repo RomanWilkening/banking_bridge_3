@@ -21,9 +21,13 @@ use Monolog\Handler\StreamHandler;
 $logger = new Logger('mqtt-publish');
 $logger->pushHandler(new StreamHandler('php://stdout', Logger::INFO));
 
-// Lock file to prevent concurrent runs
-$lockFile = '/tmp/mqtt-publish.lock';
-$lockFp = fopen($lockFile, 'w');
+// Keep the lock with the persistent database, not in an ephemeral global directory.
+$dataPath = getenv('DATA_PATH') ?: '/data';
+if (!is_dir($dataPath)) {
+    exit(0);
+}
+$lockFile = $dataPath . '/mqtt-publish.lock';
+$lockFp = fopen($lockFile, 'c');
 if ($lockFp === false || !flock($lockFp, LOCK_EX | LOCK_NB)) {
     $logger->debug('Another mqtt-publish instance is already running, skipping');
     exit(0);
@@ -41,7 +45,6 @@ $db = null;
 
 try {
     // Initialize database
-    $dataPath = getenv('DATA_PATH') ?: '/data';
     $dbPath = $dataPath . '/banking.db';
     
     if (!file_exists($dbPath)) {
@@ -56,6 +59,16 @@ try {
     if (!$mqttEnabled) {
         $logger->debug('MQTT is disabled');
         exit(0);
+    }
+
+    // Authorization changes and local expiry are independent of balance scheduling.
+    $mqttService = new MqttService($logger, $db);
+    $authorization = $mqttService->publishAuthorizationStates();
+    if (!$authorization['success']) {
+        $db->setSetting('mqtt_last_status', 'error');
+        $db->setSetting('mqtt_last_error', $authorization['message']);
+        $logger->warning('MQTT authorization publish failed', ['message' => $authorization['message']]);
+        exit(1);
     }
     
     // Check if auto-publish is enabled
@@ -81,14 +94,12 @@ try {
     $logger->info('Starting MQTT auto-publish');
     
     // Initialize MQTT service and publish
-    $mqttService = new MqttService($logger, $db);
     $result = $mqttService->publishAccountBalances();
     
     // Update timestamp and status
-    $db->setSetting('mqtt_last_publish_timestamp', (string) $now);
-    $db->setSetting('mqtt_last_publish', date('d.m.Y H:i:s'));
-    
     if ($result['success']) {
+        $db->setSetting('mqtt_last_publish_timestamp', (string) $now);
+        $db->setSetting('mqtt_last_publish', date('d.m.Y H:i:s'));
         $logger->info('MQTT auto-publish completed', [
             'published' => $result['published'] ?? 0,
             'errors' => count($result['errors'] ?? [])
@@ -100,6 +111,7 @@ try {
         $logger->warning('MQTT auto-publish failed', ['message' => $errorMsg]);
         $db->setSetting('mqtt_last_status', 'error');
         $db->setSetting('mqtt_last_error', $errorMsg);
+        exit(1);
     }
     
 } catch (\Throwable $e) {
@@ -110,8 +122,6 @@ try {
         try {
             $db->setSetting('mqtt_last_status', 'error');
             $db->setSetting('mqtt_last_error', $e->getMessage());
-            $db->setSetting('mqtt_last_publish', date('d.m.Y H:i:s'));
-            $db->setSetting('mqtt_last_publish_timestamp', (string) time());
         } catch (\Throwable $e2) {
             // Ignore
         }

@@ -36,17 +36,21 @@ return function (App $app) {
     
     // API Routes
     $app->post('/api/banks/test', [ApiController::class, 'testConnection'])->setName('api.banks.test');
-    $app->get('/api/banks/{id}/accounts', [ApiController::class, 'getAccounts'])->setName('api.banks.accounts');
-    $app->post('/api/banks/{id}/balances', [ApiController::class, 'syncBalances'])->setName('api.banks.balances');
-    $app->post('/api/banks/{id}/sync-all', [ApiController::class, 'syncAll'])->setName('api.banks.syncAll');
+    $app->get('/api/banks/{id}/accounts', [ApiController::class, 'cachedBankAccounts'])->setName('api.banks.accounts');
+    $app->post('/api/banks/{id}/balances', [ApiController::class, 'backgroundBankSync'])->setName('api.banks.balances');
+    $app->post('/api/banks/{id}/sync-all', [ApiController::class, 'backgroundBankSync'])->setName('api.banks.syncAll');
+    $app->post('/api/banks/{id}/authorize', [ApiController::class, 'authorizeBank'])->setName('api.banks.authorize');
+    $app->get('/api/banks/{id}/authorization', [ApiController::class, 'authorizationState'])->setName('api.banks.authorization');
+    $app->post('/api/banks/{id}/authorization/cancel', [ApiController::class, 'cancelAuthorization'])->setName('api.banks.authorizationCancel');
     $app->get('/api/banks/{id}/activity-log', [ApiController::class, 'getActivityLog'])->setName('api.banks.activityLog');
-    $app->get('/api/banks/{id}/capabilities', [ApiController::class, 'getBankCapabilities'])->setName('api.banks.capabilities');
-    $app->post('/api/banks/{id}/tan', [ApiController::class, 'submitTan'])->setName('api.banks.tan');
-    $app->post('/api/banks/{id}/decoupled', [ApiController::class, 'checkDecoupled'])->setName('api.banks.decoupled');
-    $app->post('/api/banks/{id}/reset-session', [ApiController::class, 'resetSession'])->setName('api.banks.resetSession');
+    $app->get('/api/banks/{id}/capabilities', [ApiController::class, 'backgroundBankSync'])->setName('api.banks.capabilities');
+    $app->post('/api/banks/{id}/tan', [ApiController::class, 'submitAuthorizationTan'])->setName('api.banks.tan');
+    $app->post('/api/banks/{id}/decoupled', [ApiController::class, 'pollAuthorization'])->setName('api.banks.decoupled');
+    $app->post('/api/banks/{id}/reset-session', [ApiController::class, 'resetAuthorization'])->setName('api.banks.resetSession');
     $app->get('/api/accounts/{id}/transactions', [ApiController::class, 'getTransactions'])->setName('api.accounts.transactions');
-    $app->post('/api/accounts/{id}/sync', [ApiController::class, 'syncAccount'])->setName('api.accounts.sync');
-    $app->post('/api/accounts/{id}/depot', [ApiController::class, 'syncDepotHoldings'])->setName('api.accounts.depot');
+    $app->post('/api/accounts/{id}/sync', [ApiController::class, 'backgroundAccountSync'])->setName('api.accounts.sync');
+    $app->post('/api/accounts/{id}/depot', [ApiController::class, 'backgroundAccountSync'])->setName('api.accounts.depot');
+    $app->post('/api/accounts/{id}/background-sync', [ApiController::class, 'setAccountBackgroundSync'])->setName('api.accounts.backgroundSync');
     $app->get('/api/accounts/{id}/holdings', [ApiController::class, 'getDepotHoldings'])->setName('api.accounts.holdings');
     
     // Auto-sync API

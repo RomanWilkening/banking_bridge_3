@@ -4,6 +4,20 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{ title ?? 'Banking Bridge' }} - FinTS Home Assistant</title>
+    <meta name="csrf-token" content="{{ csrf_token }}">
+    <script>
+        const originalFetch = window.fetch.bind(window);
+        window.fetch = (input, init = {}) => {
+            const url = new URL(input instanceof Request ? input.url : input, location.href);
+            const method = (init.method || (input instanceof Request ? input.method : 'GET')).toUpperCase();
+            if (url.origin === location.origin && !['GET', 'HEAD', 'OPTIONS'].includes(method)) {
+                const headers = new Headers(init.headers || (input instanceof Request ? input.headers : undefined));
+                headers.set('X-CSRF-Token', document.querySelector('meta[name="csrf-token"]').content);
+                init = { ...init, headers };
+            }
+            return originalFetch(input, init);
+        };
+    </script>
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
         tailwind.config = {
@@ -100,6 +114,31 @@
         </footer>
     </div>
 
+    <script>
+    function utcDate(value) {
+        if (!value) return null;
+        const normalized = value.replace(' ', 'T');
+        const date = new Date(/[zZ]$|[+-]\d{2}:?\d{2}$/.test(normalized) ? normalized : normalized + 'Z');
+        return Number.isNaN(date.getTime()) ? null : date;
+    }
+
+    function safeSyncWarning(data) {
+        if (data.reason === 'background_sync_disabled') return 'Dieses Konto ist von der Hintergrund-Synchronisierung ausgeschlossen. Einstellung auf der Bankseite ändern.';
+        if (data.reason === 'no_background_accounts') return 'Keine Konten für die Hintergrund-Synchronisierung aktiviert.';
+        const status = data.authorization?.status || data.authorization_state?.status || data.status;
+        if (data.authorization_required || data.needs_tan || status === 'required') {
+            return 'Bankfreigabe erforderlich. Bitte auf der Bankseite „Bankzugang freigeben“ wählen. Gespeicherte Daten bleiben erhalten.';
+        }
+        if (status === 'pending') return 'Bankfreigabe ausstehend. Bitte auf der Bankseite fortsetzen oder abbrechen.';
+        if (status === 'error') return data.message || 'Fehler beim Bankzugang. Gespeicherte Daten können veraltet sein.';
+        if (status === 'unknown') return 'Freigabestatus unbekannt. Es wurde keine TAN angefordert.';
+        if (data.skipped || data.status === 'skipped') return data.message || 'Synchronisierung übersprungen; gespeicherte Daten unverändert.';
+        if (data.stats?.errors?.length) return data.message || 'Synchronisierung teilweise fehlgeschlagen; gespeicherte Daten können veraltet sein.';
+        if (data.blocked) return 'Abruf ohne TAN nicht verfügbar. Nur „Bankzugang freigeben“ startet einen manuellen Abruf.';
+        if (data.cached) return 'Nur gespeicherte Konten angezeigt; kein Bankabruf durchgeführt.';
+        return null;
+    }
+    </script>
     {% block scripts %}{% endblock %}
 </body>
 </html>

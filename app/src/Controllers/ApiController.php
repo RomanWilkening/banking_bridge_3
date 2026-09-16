@@ -7,6 +7,7 @@ use Psr\Http\Message\ResponseInterface as Response;
 use Psr\Http\Message\ServerRequestInterface as Request;
 use App\Services\DatabaseService;
 use App\Services\FinTSService;
+use App\Services\AuthorizationService;
 use App\Services\MqttService;
 use Monolog\Logger;
 
@@ -18,6 +19,123 @@ class ApiController
         private MqttService $mqttService,
         private Logger $logger
     ) {}
+
+    private function authorizationService(): AuthorizationService
+    {
+        return new AuthorizationService($this->db, $this->fintsService);
+    }
+
+    private function authorizationOwner(): string
+    {
+        if (empty($_SESSION['fints_authorization_owner'])) {
+            $_SESSION['fints_authorization_owner'] = bin2hex(random_bytes(32));
+        }
+        return $_SESSION['fints_authorization_owner'];
+    }
+
+    private function authorizationResponse(Response $response, array $result): Response
+    {
+        $status = $result['http_status'] ?? 200;
+        unset($result['http_status']);
+        return $this->jsonResponse($response, $result, $status);
+    }
+
+    public function authorizeBank(Request $request, Response $response, array $args): Response
+    {
+        $data = (array) ($request->getParsedBody() ?? []);
+        $requestId = $data['request_id'] ?? null;
+        if (!is_string($requestId) || !preg_match('/^[a-zA-Z0-9_-]{8,128}$/D', $requestId)) {
+            return $this->jsonResponse($response, ['success' => false, 'reason' => 'invalid_request_id'], 400);
+        }
+        return $this->authorizationResponse($response, $this->authorizationService()->authorize(
+            (int) $args['id'], $this->authorizationOwner(), $requestId));
+    }
+
+    public function authorizationState(Request $request, Response $response, array $args): Response
+    {
+        return $this->authorizationResponse($response, $this->authorizationService()->state(
+            (int) $args['id'], $this->authorizationOwner()));
+    }
+
+    public function submitAuthorizationTan(Request $request, Response $response, array $args): Response
+    {
+        $data = (array) ($request->getParsedBody() ?? []);
+        if (!is_string($data['tan'] ?? null) || trim($data['tan']) === '' || !is_string($data['operation_id'] ?? null)) {
+            return $this->jsonResponse($response, ['success' => false, 'reason' => 'invalid_tan_submission'], 400);
+        }
+        return $this->authorizationResponse($response, $this->authorizationService()->resume(
+            (int) $args['id'], $this->authorizationOwner(), $data['operation_id'], trim($data['tan']), false));
+    }
+
+    public function pollAuthorization(Request $request, Response $response, array $args): Response
+    {
+        $data = (array) ($request->getParsedBody() ?? []);
+        if (!is_string($data['operation_id'] ?? null)) {
+            return $this->jsonResponse($response, ['success' => false, 'reason' => 'operation_id_required'], 400);
+        }
+        return $this->authorizationResponse($response, $this->authorizationService()->resume(
+            (int) $args['id'], $this->authorizationOwner(), $data['operation_id'], null, true));
+    }
+
+    public function cancelAuthorization(Request $request, Response $response, array $args): Response
+    {
+        $data = (array) ($request->getParsedBody() ?? []);
+        if (!is_string($data['operation_id'] ?? null)) {
+            return $this->jsonResponse($response, ['success' => false, 'reason' => 'operation_id_required'], 400);
+        }
+        return $this->authorizationResponse($response, $this->authorizationService()->cancel(
+            (int) $args['id'], $this->authorizationOwner(), $data['operation_id']));
+    }
+
+    public function resetAuthorization(Request $request, Response $response, array $args): Response
+    {
+        return $this->authorizationResponse($response, $this->authorizationService()->cancel(
+            (int) $args['id'], $this->authorizationOwner(), '', true));
+    }
+
+    public function backgroundBankSync(Request $request, Response $response, array $args): Response
+    {
+        $bankId = (int) $args['id'];
+        $result = $this->authorizationService()->blocked($bankId);
+        if (!isset($result['http_status']) && empty($this->db->getAccountsForBackgroundSync($bankId))) {
+            $result['reason'] = 'no_background_accounts';
+        }
+        return $this->authorizationResponse($response, $result);
+    }
+
+    public function backgroundAccountSync(Request $request, Response $response, array $args): Response
+    {
+        $account = $this->db->getAccountById((int) $args['id']);
+        if (!$account) {
+            return $this->jsonResponse($response, ['success' => false, 'reason' => 'account_not_found'], 404);
+        }
+        if (empty($account['background_sync_enabled'])) {
+            return $this->jsonResponse($response, ['success' => false, 'blocked' => true, 'reason' => 'background_sync_disabled']);
+        }
+        return $this->authorizationResponse($response, $this->authorizationService()->blocked((int) $account['bank_id']));
+    }
+
+    public function cachedBankAccounts(Request $request, Response $response, array $args): Response
+    {
+        $bankId = (int) $args['id'];
+        if (!$this->db->getBankById($bankId)) {
+            return $this->jsonResponse($response, ['success' => false, 'reason' => 'bank_not_found'], 404);
+        }
+        return $this->jsonResponse($response, ['success' => true, 'cached' => true,
+            'accounts' => $this->db->getAccountsByBankId($bankId),
+            'authorization' => $this->db->getBankAuthorizationState($bankId),
+            'background_sync_available' => false]);
+    }
+
+    public function setAccountBackgroundSync(Request $request, Response $response, array $args): Response
+    {
+        $data = (array) ($request->getParsedBody() ?? []);
+        if (!is_bool($data['enabled'] ?? null)) {
+            return $this->jsonResponse($response, ['success' => false, 'reason' => 'enabled_must_be_boolean'], 400);
+        }
+        $success = $this->db->setAccountBackgroundSync((int) $args['id'], $data['enabled']);
+        return $this->jsonResponse($response, ['success' => $success, 'background_sync_enabled' => $data['enabled']], $success ? 200 : 404);
+    }
 
     /**
      * Test bank connection
@@ -1129,18 +1247,11 @@ class ApiController
         
         $banks = $this->db->getAllBanks();
         
-        if (empty($banks)) {
-            return $this->jsonResponse($response, [
-                'success' => true,
-                'message' => 'Keine Banken konfiguriert',
-                'results' => []
-            ]);
-        }
-        
         $results = [];
         $totalStats = [
             'banks_synced' => 0,
             'banks_skipped' => 0,
+            'paypal_synced' => 0,
             'balances_updated' => 0,
             'transactions_new' => 0,
             'holdings_updated' => 0,
@@ -1154,7 +1265,7 @@ class ApiController
             $this->logger->info('Auto-sync processing bank', ['bank_id' => $bankId, 'name' => $bankName]);
             
             // Get accounts for this bank
-            $accounts = $this->db->getAccountsByBankId($bankId);
+            $accounts = $this->db->getAccountsForBackgroundSync((int) $bankId);
             if (empty($accounts)) {
                 $this->logger->info('Skipping bank - no accounts', ['bank_id' => $bankId]);
                 $results[$bankName] = ['status' => 'skipped', 'reason' => 'Keine Konten'];
@@ -1162,42 +1273,17 @@ class ApiController
                 continue;
             }
             
-            // Check if any account requires manual TAN approval
-            $hasManualTanApproval = !empty(array_filter($accounts, function($account) {
-                return !empty($account['tan_manual_approval']);
-            }));
-            
-            // Try to use existing session
-            $existingSession = $this->db->getFinTSSession($bankId);
-            $persistedInstance = $existingSession ? $existingSession['session_data'] : null;
-            
             try {
-                $result = $this->fintsService->syncAll(
-                    [
-                        'bank_code' => $bank['bank_code'],
-                        'fints_url' => $bank['fints_url'],
-                        'username' => $bank['username'],
-                        'password' => $bank['password']
-                    ],
-                    $accounts,
-                    $persistedInstance
-                );
-                
-                // If TAN is required, skip this bank
-                if (isset($result['needs_tan']) && $result['needs_tan']) {
-                    if ($hasManualTanApproval) {
-                        $this->logger->info('Auto-sync: TAN required, manual approval configured', ['bank_id' => $bankId]);
-                        $results[$bankName] = ['status' => 'skipped', 'reason' => 'TAN erforderlich – manuelle Freigabe konfiguriert'];
-                    } else {
-                        $this->logger->info('Auto-sync: TAN required, skipping', ['bank_id' => $bankId]);
-                        $results[$bankName] = ['status' => 'skipped', 'reason' => 'TAN erforderlich'];
-                    }
+                $result = $this->authorizationService()->blocked((int) $bankId);
+                if (!empty($result['blocked'])) {
+                    $results[$bankName] = ['status' => 'skipped', 'reason' => $result['reason']];
                     $totalStats['banks_skipped']++;
+                    $totalStats['errors'][] = $bankName . ': ' . $result['reason'];
                     
                     $this->db->logActivity(
                         'auto_sync_skipped',
                         'warning',
-                        'Auto-Sync übersprungen – TAN erforderlich',
+                        $result['reason'],
                         $bankId
                     );
                     continue;
@@ -1232,8 +1318,27 @@ class ApiController
             }
         }
         
+        $paypal = new \App\Services\PayPalService($this->logger, $this->db);
+        foreach ($this->db->getAllPayPalAccounts() as $account) {
+            try {
+                $result = $paypal->syncAccount((int) $account['id']);
+                if (empty($result['success'])) {
+                    $totalStats['errors'][] = 'PayPal: ' . $account['name'];
+                    continue;
+                }
+                $totalStats['paypal_synced']++;
+                $totalStats['balances_updated'] += isset($result['balance']) ? 1 : 0;
+                $totalStats['transactions_new'] += (int) ($result['transactions_new'] ?? 0);
+            } catch (\Throwable $e) {
+                $totalStats['errors'][] = 'PayPal: ' . $account['name'];
+            }
+        }
+
         // Update last run timestamp
         $this->db->setSetting('auto_sync_last_run', date('d.m.Y H:i'));
+        $this->db->setSetting('auto_sync_last_run_timestamp', (string) time());
+        $this->db->setSetting('auto_sync_last_status', empty($totalStats['errors']) ? 'success' : 'partial');
+        $this->db->setSetting('auto_sync_last_error', implode(', ', $totalStats['errors']));
         
         $this->logger->info('=== AUTO SYNC COMPLETED ===', $totalStats);
         
@@ -2018,7 +2123,7 @@ class ApiController
         
         return $this->jsonResponse($response, [
             'success' => true,
-            'message' => $enabled ? 'Manuelle TAN-Freigabe aktiviert – bei abgelaufener TAN wird kein automatischer TAN-Abruf durchgeführt' : 'Automatischer TAN-Abruf aktiviert',
+            'message' => $enabled ? 'Manuelle TAN-Markierung aktiviert. TAN-Anforderungen sind immer nur nach ausdrücklicher Freigabe möglich.' : 'Manuelle TAN-Markierung deaktiviert. Automatische TAN-Anforderungen bleiben gesperrt.',
             'tan_manual_approval' => $enabled
         ]);
     }
@@ -2065,40 +2170,14 @@ class ApiController
             ], 404);
         }
         
-        $session = $this->db->getFinTSSession($bankId);
-        
-        if (!$session) {
-            return $this->jsonResponse($response, [
-                'success' => true,
-                'has_session' => false,
-                'message' => 'Keine aktive TAN-Session vorhanden'
-            ]);
-        }
-        
-        $createdAt = new \DateTime($session['created_at']);
-        $expiresAt = new \DateTime($session['expires_at']);
-        $now = new \DateTime();
-        
-        $remainingSeconds = max(0, $expiresAt->getTimestamp() - $now->getTimestamp());
-        $remainingDays = (int) ceil($remainingSeconds / 86400);
-        
-        $totalDays = (int) ceil(($expiresAt->getTimestamp() - $createdAt->getTimestamp()) / 86400);
-        $elapsedDays = max(0, $totalDays - $remainingDays);
-        
-        $progressPercent = $totalDays > 0 ? min(100, round(($elapsedDays / $totalDays) * 100)) : 100;
-        
-        return $this->jsonResponse($response, [
-            'success' => true,
-            'has_session' => true,
-            'created_at' => $createdAt->format('d.m.Y H:i'),
-            'expires_at' => $expiresAt->format('d.m.Y H:i'),
-            'remaining_days' => $remainingDays,
-            'total_days' => $totalDays,
-            'progress_percent' => $progressPercent,
-            'tan_mode' => $session['tan_mode'] ?? null,
-            'tan_medium' => $session['tan_medium'] ?? null,
-            'is_valid' => $remainingDays > 0
-        ]);
+        $result = $this->authorizationService()->state($bankId, $this->authorizationOwner());
+        $session = $this->db->getFinTSSession($bankId, true);
+        $result['technical_session'] = [
+            'present' => $session !== null,
+            'expires_at' => $session['expires_at'] ?? null,
+            'is_authorization_guarantee' => false,
+        ];
+        return $this->authorizationResponse($response, $result);
     }
     
     // Database Maintenance Methods

@@ -44,7 +44,7 @@ class PayPalService
     /**
      * Make NVP API call
      */
-    private function call(array $credentials, string $method, array $params = []): array
+    protected function call(array $credentials, string $method, array $params = []): array
     {
         $nvpData = array_merge([
             'USER' => $credentials['api_username'],
@@ -103,8 +103,8 @@ class PayPalService
     {
         // Use TransactionSearch with a very short time window as a test
         $result = $this->call($credentials, 'TransactionSearch', [
-            'STARTDATE' => date('Y-m-d\TH:i:s\Z', strtotime('-1 day')),
-            'ENDDATE' => date('Y-m-d\TH:i:s\Z'),
+            'STARTDATE' => gmdate('Y-m-d\TH:i:s\Z', strtotime('-1 day')),
+            'ENDDATE' => gmdate('Y-m-d\TH:i:s\Z'),
         ]);
         
         if ($result['success']) {
@@ -136,29 +136,27 @@ class PayPalService
         $data = $result['data'];
         $balances = [];
         
-        // Primary balance
-        if (isset($data['L_AMT0'])) {
-            $balances[] = [
-                'amount' => (float) $data['L_AMT0'],
-                'currency' => $data['L_CURRENCYCODE0'] ?? 'EUR'
-            ];
-        }
-        
-        // Additional currencies
-        $i = 1;
+        $i = 0;
         while (isset($data["L_AMT{$i}"])) {
+            if (!is_numeric($data["L_AMT{$i}"]) || !is_finite((float) $data["L_AMT{$i}"])
+                || !preg_match('/^[A-Z]{3}$/D', $data["L_CURRENCYCODE{$i}"] ?? '')) {
+                return ['success' => false, 'error' => 'Invalid PayPal balance response'];
+            }
             $balances[] = [
                 'amount' => (float) $data["L_AMT{$i}"],
-                'currency' => $data["L_CURRENCYCODE{$i}"] ?? 'EUR'
+                'currency' => $data["L_CURRENCYCODE{$i}"]
             ];
             $i++;
+        }
+        if (!$balances) {
+            return ['success' => false, 'error' => 'PayPal response did not contain a balance'];
         }
         
         return [
             'success' => true,
             'balances' => $balances,
-            'primary_balance' => $balances[0]['amount'] ?? 0,
-            'primary_currency' => $balances[0]['currency'] ?? 'EUR'
+            'primary_balance' => $balances[0]['amount'],
+            'primary_currency' => $balances[0]['currency']
         ];
     }
     
@@ -174,6 +172,8 @@ class PayPalService
         if (!$endDate) {
             $endDate = new \DateTime();
         }
+        $startDate = (clone $startDate)->setTimezone(new \DateTimeZone('UTC'));
+        $endDate = (clone $endDate)->setTimezone(new \DateTimeZone('UTC'));
         
         $this->logger->info('PayPal TransactionSearch', [
             'start' => $startDate->format('Y-m-d'),
@@ -190,11 +190,20 @@ class PayPalService
         }
         
         $data = $result['data'];
+        if (($data['ACK'] ?? '') === 'SuccessWithWarning') {
+            return ['success' => false, 'error' => 'PayPal transaction search returned incomplete results'];
+        }
         $transactions = [];
         
         // Parse transactions from response (L_* fields)
         $i = 0;
         while (isset($data["L_TRANSACTIONID{$i}"])) {
+            if (trim($data["L_TRANSACTIONID{$i}"]) === ''
+                || !isset($data["L_AMT{$i}"]) || !is_numeric($data["L_AMT{$i}"])
+                || !is_finite((float) $data["L_AMT{$i}"])
+                || !preg_match('/^[A-Z]{3}$/D', $data["L_CURRENCYCODE{$i}"] ?? '')) {
+                return ['success' => false, 'error' => 'Invalid PayPal transaction response'];
+            }
             $tx = [
                 'transaction_id' => $data["L_TRANSACTIONID{$i}"],
                 'timestamp' => $this->parsePayPalDate($data["L_TIMESTAMP{$i}"] ?? null),
@@ -202,10 +211,10 @@ class PayPalService
                 'email' => $data["L_EMAIL{$i}"] ?? null,
                 'name' => $data["L_NAME{$i}"] ?? null,
                 'status' => $data["L_STATUS{$i}"] ?? null,
-                'amount' => (float) ($data["L_AMT{$i}"] ?? 0),
+                'amount' => (float) $data["L_AMT{$i}"],
                 'fee_amount' => (float) ($data["L_FEEAMT{$i}"] ?? 0),
                 'net_amount' => (float) ($data["L_NETAMT{$i}"] ?? 0),
-                'currency' => $data["L_CURRENCYCODE{$i}"] ?? 'EUR',
+                'currency' => $data["L_CURRENCYCODE{$i}"],
                 'subject' => $data["L_SUBJECT{$i}"] ?? null,
             ];
             $transactions[] = $tx;
@@ -231,8 +240,8 @@ class PayPalService
         }
         
         try {
-            $dt = new \DateTime($date);
-            return $dt->format('Y-m-d H:i:s');
+            $dt = new \DateTimeImmutable($date, new \DateTimeZone('UTC'));
+            return $dt->setTimezone(new \DateTimeZone('UTC'))->format('Y-m-d H:i:s');
         } catch (\Exception $e) {
             return null;
         }
@@ -256,37 +265,59 @@ class PayPalService
         
         $this->logger->info('Syncing PayPal account', ['id' => $paypalAccountId, 'name' => $account['name']]);
         
-        // Get balance
-        $balanceResult = $this->getBalance($credentials);
-        if ($balanceResult['success']) {
-            $this->db->updatePayPalAccountBalance(
-                $paypalAccountId,
-                $balanceResult['primary_balance'],
-                date('Y-m-d H:i:s')
-            );
+        try {
+            $balanceResult = $this->getBalance($credentials);
+            if ($balanceResult['success']) {
+                $this->db->updatePayPalAccountBalance(
+                    $paypalAccountId,
+                    $balanceResult['primary_balance'],
+                    gmdate('Y-m-d H:i:s'),
+                    $balanceResult['primary_currency']
+                );
+            }
+        } catch (\Throwable $e) {
+            $this->logger->error('PayPal balance synchronization failed', ['id' => $paypalAccountId]);
+            $balanceResult = ['success' => false, 'error' => 'PayPal balance synchronization failed'];
         }
-        
-        // Get transactions (last 30 days)
-        $txResult = $this->searchTransactions($credentials);
+
         $newTransactions = 0;
-        
-        if ($txResult['success']) {
-            $saveResult = $this->db->savePayPalTransactions($paypalAccountId, $txResult['transactions']);
-            $newTransactions = $saveResult['new'];
+        try {
+            $txResult = $this->searchTransactions($credentials);
+            if ($txResult['success']) {
+                $saveResult = $this->db->savePayPalTransactions($paypalAccountId, $txResult['transactions']);
+                $newTransactions = $saveResult['new'];
+            }
+        } catch (\Throwable $e) {
+            $this->logger->error('PayPal transaction synchronization failed', ['id' => $paypalAccountId]);
+            $txResult = ['success' => false, 'error' => 'PayPal transaction synchronization failed'];
         }
-        
+
+        $success = $balanceResult['success'] && $txResult['success'];
+        $partial = (bool) $balanceResult['success'] !== (bool) $txResult['success'];
+        $operations = [];
+        $errors = [];
+        foreach (['balance' => $balanceResult, 'transactions' => $txResult] as $operation => $result) {
+            $error = $result['success'] ? null : ($result['error'] ?? 'PayPal operation failed');
+            $operations[$operation] = ['success' => (bool) $result['success'], 'error' => $error];
+            if ($error !== null) {
+                $errors[$operation] = $error;
+            }
+        }
         return [
-            'success' => true,
+            'success' => $success,
+            'partial' => $partial,
+            'operations' => $operations,
+            'errors' => $errors,
             'balance' => $balanceResult['success'] ? $balanceResult['primary_balance'] : null,
-            'currency' => $balanceResult['success'] ? $balanceResult['primary_currency'] : 'EUR',
+            'currency' => $balanceResult['success'] ? $balanceResult['primary_currency'] : $account['currency'],
             'transactions_found' => $txResult['count'] ?? 0,
             'transactions_new' => $newTransactions,
-            'message' => sprintf(
+            'message' => $success ? sprintf(
                 'Sync erfolgreich. Saldo: %.2f %s, %d neue Transaktionen',
                 $balanceResult['primary_balance'] ?? 0,
                 $balanceResult['primary_currency'] ?? 'EUR',
                 $newTransactions
-            )
+            ) : ($partial ? 'Sync teilweise erfolgreich. ' : 'Sync fehlgeschlagen. ') . implode('; ', $errors)
         ];
     }
 }
